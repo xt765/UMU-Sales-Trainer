@@ -1,26 +1,26 @@
 """Embedding service for text vectorization.
 
-Uses sentence-transformers library with all-MiniLM-L6-v2 model to generate
-semantic embeddings for text. Includes LRU caching for improved performance.
+Uses DashScope text-embedding API to generate semantic embeddings for text.
+Includes LRU caching for improved performance. No local model download required.
 """
 
 import hashlib
+import os
 from typing import List
 
-from sentence_transformers import SentenceTransformer
+import httpx
 
 
 class EmbeddingService:
-    """Sentence-transformers based embedding service.
+    """DashScope text-embedding API based embedding service.
 
-    Provides text vectorization using the all-MiniLM-L6-v2 model, optimized
-    for semantic similarity tasks. Includes caching to reduce redundant
-    encoding operations.
+    Provides text vectorization using DashScope's text-embedding-v1 API,
+    optimized for semantic similarity tasks. Includes caching to reduce
+    redundant encoding operations.
 
     Attributes:
-        _model: The underlying sentence-transformer model instance.
-        _device: Device to run the model on ("cpu" or "cuda").
         _cache: Dictionary-based cache for encoding results.
+        _client: HTTP client for DashScope API requests.
 
     Example:
         >>> service = EmbeddingService()
@@ -28,34 +28,32 @@ class EmbeddingService:
         >>> query_embedding = service.encode_query("search query")
     """
 
+    DASHSCOPE_EMBEDDING_URL = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding"
+
     def __init__(
         self,
-        model_name: str = "all-MiniLM-L6-v2",
-        device: str = "cpu",
+        model_name: str = "text-embedding-v1",
     ) -> None:
         """Initialize the embedding service.
 
         Args:
-            model_name: Name of the sentence-transformer model to use.
-                Defaults to "all-MiniLM-L6-v2".
-            device: Device to run the model on. Defaults to "cpu".
-                Use "cuda" for GPU acceleration if available.
+            model_name: Name of the DashScope embedding model.
+                Defaults to "text-embedding-v1".
         """
         self._model_name = model_name
-        self._device = device
-        self._model: SentenceTransformer | None = None
+        self._api_key = os.environ.get("DASHSCOPE_API_KEY", "")
         self._cache: dict[str, List[float]] = {}
+        self._client: httpx.Client | None = None
 
-    @property
-    def model(self) -> SentenceTransformer:
-        """Lazy-load the sentence-transformer model.
+    def _get_client(self) -> httpx.Client:
+        """Get or create HTTP client.
 
         Returns:
-            The initialized SentenceTransformer model instance.
+            Configured httpx Client instance.
         """
-        if self._model is None:
-            self._model = SentenceTransformer(self._model_name, device=self._device)
-        return self._model
+        if self._client is None:
+            self._client = httpx.Client(timeout=30.0)
+        return self._client
 
     def _get_cache_key(self, text: str) -> str:
         """Generate a cache key for a given text.
@@ -83,9 +81,13 @@ class EmbeddingService:
 
         Raises:
             ValueError: If texts is empty.
+            RuntimeError: If API key is not set or API call fails.
         """
         if not texts:
             raise ValueError("texts cannot be empty")
+
+        if not self._api_key:
+            raise RuntimeError("DASHSCOPE_API_KEY environment variable is not set")
 
         results: List[List[float]] = []
         for text in texts:
@@ -93,10 +95,9 @@ class EmbeddingService:
             if cache_key in self._cache:
                 results.append(self._cache[cache_key])
             else:
-                embedding = self.model.encode(text, normalize_embeddings=True)
-                embedding_list = embedding.tolist()
-                self._cache[cache_key] = embedding_list
-                results.append(embedding_list)
+                embedding = self._call_embedding_api(text)
+                self._cache[cache_key] = embedding
+                results.append(embedding)
         return results
 
     def encode_query(self, text: str) -> List[float]:
@@ -112,18 +113,56 @@ class EmbeddingService:
 
         Raises:
             ValueError: If text is empty.
+            RuntimeError: If API key is not set or API call fails.
         """
         if not text:
             raise ValueError("text cannot be empty")
+
+        if not self._api_key:
+            raise RuntimeError("DASHSCOPE_API_KEY environment variable is not set")
 
         cache_key = f"query_{self._get_cache_key(text)}"
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        embedding = self.model.encode(text, normalize_embeddings=True)
-        embedding_list = embedding.tolist()
-        self._cache[cache_key] = embedding_list
-        return embedding_list
+        embedding = self._call_embedding_api(text)
+        self._cache[cache_key] = embedding
+        return embedding
+
+    def _call_embedding_api(self, text: str) -> List[float]:
+        """Call DashScope embedding API.
+
+        Args:
+            text: Text to encode.
+
+        Returns:
+            Embedding vector as list of floats.
+
+        Raises:
+            RuntimeError: If API call fails.
+        """
+        client = self._get_client()
+
+        payload = {
+            "model": self._model_name,
+            "input": {"texts": [text]},
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+
+        response = client.post(self.DASHSCOPE_EMBEDDING_URL, json=payload, headers=headers)
+        response.raise_for_status()
+
+        data = response.json()
+        embedding = data.get("output", {}).get("embeddings", [{}])[0].get("embedding", [])
+
+        if not embedding:
+            raise RuntimeError(f"Failed to extract embedding from API response: {data}")
+
+        return embedding
 
     def clear_cache(self) -> None:
         """Clear the encoding cache.
@@ -131,3 +170,12 @@ class EmbeddingService:
         Removes all cached embeddings to free memory.
         """
         self._cache.clear()
+
+    def close(self) -> None:
+        """Close the HTTP client.
+
+        Should be called when the service is no longer needed.
+        """
+        if self._client is not None:
+            self._client.close()
+            self._client = None

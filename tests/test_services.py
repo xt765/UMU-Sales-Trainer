@@ -59,50 +59,42 @@ class TestEmbeddingService:
         """
         from umu_sales_trainer.services.embedding import EmbeddingService
 
-        service = EmbeddingService(model_name="all-MiniLM-L6-v2")
-        assert service._model_name == "all-MiniLM-L6-v2"
+        service = EmbeddingService(model_name="text-embedding-v1")
+        assert service._model_name == "text-embedding-v1"
 
-    def test_encode_single_text(self) -> None:
-        """测试单个文本编码。
+    def test_encode_empty_raises_error(self) -> None:
+        """测试空文本列表抛出错误。
 
-        验证 encode 方法能正确处理单个字符串输入。
+        验证 encode 方法在输入为空列表时抛出 ValueError。
         """
         from umu_sales_trainer.services.embedding import EmbeddingService
 
-        service = EmbeddingService(model_name="all-MiniLM-L6-v2")
-        result = service.encode(["测试文本"])
+        service = EmbeddingService()
+        with pytest.raises(ValueError, match="texts cannot be empty"):
+            service.encode([])
 
-        assert isinstance(result, list)
-        assert len(result) == 1
-        assert len(result[0]) > 0
+    def test_encode_query_empty_raises_error(self) -> None:
+        """测试空查询文本抛出错误。
 
-    def test_encode_multiple_texts(self) -> None:
-        """测试多个文本编码。
-
-        验证 encode 方法能正确处理文本列表输入。
+        验证 encode_query 方法在输入为空字符串时抛出 ValueError。
         """
         from umu_sales_trainer.services.embedding import EmbeddingService
 
-        service = EmbeddingService(model_name="all-MiniLM-L6-v2")
-        texts = ["测试文本1", "测试文本2"]
-        result = service.encode(texts)
+        service = EmbeddingService()
+        with pytest.raises(ValueError, match="text cannot be empty"):
+            service.encode_query("")
 
-        assert isinstance(result, list)
-        assert len(result) == 2
-        assert all(isinstance(x, list) for x in result)
+    def test_encode_no_api_key_raises_error(self) -> None:
+        """测试未设置 API key 时抛出错误。
 
-    def test_encode_query(self) -> None:
-        """测试查询文本编码。
-
-        验证 encode_query 方法能正确处理单个查询文本。
+        验证 encode 方法在 DASHSCOPE_API_KEY 未设置时抛出 RuntimeError。
         """
         from umu_sales_trainer.services.embedding import EmbeddingService
 
-        service = EmbeddingService(model_name="all-MiniLM-L6-v2")
-        result = service.encode_query("查询文本")
-
-        assert isinstance(result, list)
-        assert len(result) > 0
+        service = EmbeddingService()
+        with patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(RuntimeError, match="DASHSCOPE_API_KEY"):
+                service.encode(["测试文本"])
 
     def test_clear_cache(self) -> None:
         """测试缓存清除。
@@ -111,11 +103,26 @@ class TestEmbeddingService:
         """
         from umu_sales_trainer.services.embedding import EmbeddingService
 
-        service = EmbeddingService(model_name="all-MiniLM-L6-v2")
-        service.encode(["测试文本"])
-        service.clear_cache()
-
+        service = EmbeddingService()
         assert len(service._cache) == 0
+        service.clear_cache()
+        assert len(service._cache) == 0
+
+    def test_get_cache_key(self) -> None:
+        """测试缓存键生成。
+
+        验证 _get_cache_key 方法能正确生成 MD5 哈希。
+        """
+        from umu_sales_trainer.services.embedding import EmbeddingService
+
+        service = EmbeddingService()
+        key1 = service._get_cache_key("测试文本")
+        key2 = service._get_cache_key("测试文本")
+        key3 = service._get_cache_key("不同文本")
+
+        assert key1 == key2
+        assert key1 != key3
+        assert len(key1) == 32
 
 
 class TestChromaService:

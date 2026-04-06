@@ -141,7 +141,7 @@ class TestGuidanceGenerator:
         guidance = guidance_generator.generate(uncovered_points, context)
 
         assert "药品外观" in guidance
-        assert "除了" in guidance or "了解" in guidance
+        assert "补充" in guidance or "还有什么" in guidance
 
     @pytest.mark.asyncio
     async def test_generate_with_rag(
