@@ -7,11 +7,11 @@
 <!-- 效果展示 -->
 
 <p align="center">
-  <img src="docs/images/cb0514cc4f57175e90b9e90da22f434a.png" alt="完整界面布局 — 左侧6大分析面板 + 右侧对话区域 + 输入框上方推荐话术面板（默认折叠）" width="100%" />
+  <img src="docs/images/screenshot-quick-reply.png" width="100%" />
 </p>
 
 <p align="center">
-  <img src="docs/images/08a7293d67cd39637a4bd13159476cde.png" alt="推荐话术面板展开效果 — 3种策略话术卡片（数据导向/共情切入/利益推动），点击即发送，直接回应客户最新提问" width="100%" />
+  <img src="docs/images/screenshot-main.png" width="100%" />
 </p>
 
 ## 目录
