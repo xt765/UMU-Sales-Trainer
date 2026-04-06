@@ -36,38 +36,38 @@ sequenceDiagram
     Router->>WF: invoke(WorkflowState)
 
     par 并行分析阶段（Fan-out）
-        WF->>CA: _node_conversation_analyze(state)
+        WF->>CA: node-conversation-analyze(state)
         Note right of CA: LLM: 分析阶段/意图/异议
         CA-->>WF: ConversationAnalysis
 
-        WF->>SE: _node_semantic_eval(state)
+        WF->>SE: node-semantic-eval(state)
         Note right of SE: 3-layer detection<br/>keyword(0.2) + embedding(0.3) + llm(0.5)
         SE-->>WF: CoverageResult
 
-        WF->>EC: _node_expression_eval(state)
+        WF->>EC: node-expression-eval(state)
         Note right of EC: LLM: 三维评分 + 建议
         EC-->>WF: ExpressionResult
     end
 
-    WF->>WF: _node_synthesize(state)<br/>calculate_overall_score(cov, expr, turn)
+    WF->>WF: node-synthesize(state)<br/>calculate-overall-score(cov, expr, turn)
 
     alt 需要引导（coverage < 80% or score < 70）
-        WF->>GM: _node_guidance(state)<br/>GuidanceMentor.generate_guidance()
-        GM-->>WF: GuidanceResult(is_actionable=True)
+        WF->>GM: node-guidance(state)<br/>GuidanceMentor.generate-guidance()
+        GM-->>WF: GuidanceResult(is-actionable=True)
     else 表现优秀（coverage >= 80% and score >= 70）
         Note over WF: 跳过 guidance 节点
     end
 
-    WF->>CS: _node_simulate(state)<br/>LLM 客户角色扮演
-    CS-->>WF: ai_response
+    WF->>CS: node-simulate(state)<br/>LLM 客户角色扮演
+    CS-->>WF: ai-response
 
     WF-->>Router: 完整 WorkflowState
 
     par 响应格式化
         Router->>DB: save_message(role="assistant")
-        Router->>DB: save_coverage_record()
-        Router->>Router: _format_evaluation()
-        Router->>Router: _format_guidance()
+        Router->>DB: save_coverage-record()
+        Router->>Router: format-evaluation()
+        Router->>Router: format-guidance()
     end
 
     Router-->>FE: SendMessageResponse<br/>{ai_response, evaluation, guidance}
@@ -600,8 +600,8 @@ graph LR
 stateDiagram-v2
     [*] --> CheckActionable: 收到 guidance 数据
 
-    CheckActionable --> RenderExcellent: is_actionable == false
-    CheckActionable --> RenderImprovement: is_actionable == true
+    CheckActionable --> RenderExcellent: is-actionable == false
+    CheckActionable --> RenderImprovement: is-actionable == true
 
     state RenderExcellent {
         [*] --> SetGreenCSS

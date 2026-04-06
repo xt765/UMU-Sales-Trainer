@@ -356,7 +356,7 @@ graph TD
     SE --> SYN
     EE --> SYN
 
-    SYN --> ROUTE{should_generate<br>_guidance?}
+    SYN --> ROUTE{"should-generate guidance?"}
 
     ROUTE -->|yes| GUID[guidance<br/>GuidanceMentor]
     ROUTE -->|no| SIM[simulate<br/>CustomerSimulator]
@@ -641,16 +641,16 @@ stateDiagram-v2
     state Excellent {
         [*] --> ShowGreenPanel
         ShowGreenPanel: summary = "表现优秀，继续保持！"
-        ShowGreenPanel: is_actionable = False
-        ShowGreenPanel: priority_list = []
+        ShowGreenPanel: is-actionable = False
+        ShowGreenPanel: priority-list = []
     }
 
     state Improvement {
         [*] --> BuildItems
         BuildItems --> SortByUrgency
         SortByUrgency --> ShowYellowPanel
-        ShowYellowPanel: is_actionable = True
-        ShowYellowPanel: priority_list = [sorted items]
+        ShowYellowPanel: is-actionable = True
+        ShowYellowPanel: priority-list = [sorted items]
     }
 ```
 
@@ -739,7 +739,7 @@ $$
 差异化加权组合，说服力权重最高：
 
 $$
-\text{expression\_score} = \frac{\text{clarity} \times 0.2 + \text{professionalism} \times 0.3 + \text{persuasiveness} \times 0.5}{10} \times 35
+\text{ExpressionScore} = \frac{\text{Clarity} \times 0.2 + \text{Professionalism} \times 0.3 + \text{Persuasiveness} \times 0.5}{10} \times 35
 $$
 
 假设三维均为满分（10 分）：`(10*0.2 + 10*0.3 + 10*0.5) / 10 * 35 = 35.0`
