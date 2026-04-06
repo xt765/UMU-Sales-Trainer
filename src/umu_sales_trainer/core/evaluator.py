@@ -17,7 +17,6 @@ from typing import List, Optional
 from langchain_core.messages import HumanMessage
 
 from umu_sales_trainer.models.evaluation import (
-    EvaluationResult,
     ExpressionAnalysis,
 )
 from umu_sales_trainer.models.semantic import SemanticPoint
@@ -66,10 +65,12 @@ class ExpressionResult:
     Attributes:
         analysis: 表达能力三维度分析
         suggestions: 改进建议列表
+        raw_message_length: 原始消息字符数（用于质量调整分计算）
     """
 
     analysis: ExpressionAnalysis = field(default_factory=lambda: ExpressionAnalysis())
     suggestions: list[Suggestion] = field(default_factory=list)
+    raw_message_length: int = 0
 
 
 class SemanticCoverageExpert:
@@ -127,17 +128,13 @@ class SemanticCoverageExpert:
             CoverageResult 覆盖检测结果
         """
         context = context or {}
-        session_id = context.get("session_id", "unknown")
         coverage_status: dict[str, str] = {}
 
         for point in semantic_points:
             result = self._evaluate_single_point(sales_message, point)
             coverage_status[point.point_id] = result
 
-        uncovered = [
-            pid for pid, status in coverage_status.items()
-            if status != "covered"
-        ]
+        uncovered = [pid for pid, status in coverage_status.items() if status != "covered"]
         coverage_rate = self._calculate_coverage_rate(coverage_status)
 
         logger.info(
@@ -153,9 +150,7 @@ class SemanticCoverageExpert:
             uncovered_points=uncovered,
         )
 
-    def _evaluate_single_point(
-        self, message: str, point: SemanticPoint
-    ) -> str:
+    def _evaluate_single_point(self, message: str, point: SemanticPoint) -> str:
         """评估单个语义点的覆盖情况。
 
         通过三层检测加权综合判断是否覆盖。
@@ -325,7 +320,11 @@ class ExpressionCoach:
             analysis = self._rule_based_expression_analysis(message)
             suggestions = self._generate_suggestions_from_rules(analysis)
 
-        return ExpressionResult(analysis=analysis, suggestions=suggestions)
+        return ExpressionResult(
+            analysis=analysis,
+            suggestions=suggestions,
+            raw_message_length=len(message),
+        )
 
     def _llm_evaluate(self, message: str) -> ExpressionAnalysis:
         """通过 LLM 评估表达能力三维度。
@@ -368,9 +367,7 @@ class ExpressionCoach:
         response = self.llm_service.invoke([HumanMessage(content=prompt)])
         return self._parse_expression_response(response.content)
 
-    def _generate_suggestions(
-        self, message: str, analysis: ExpressionAnalysis
-    ) -> list[Suggestion]:
+    def _generate_suggestions(self, message: str, analysis: ExpressionAnalysis) -> list[Suggestion]:
         """基于评分结果生成改进建议。
 
         对低于 7 分的维度生成具体改进建议和参考话术。
@@ -391,9 +388,7 @@ class ExpressionCoach:
 
         for dim_key, dim_name, score in dimensions:
             if score < 7:
-                suggestion = self._build_suggestion_for_dimension(
-                    dim_key, dim_name, score, message
-                )
+                suggestion = self._build_suggestion_for_dimension(dim_key, dim_name, score, message)
                 suggestions.append(suggestion)
 
         return suggestions
@@ -429,10 +424,13 @@ class ExpressionCoach:
             },
         }
 
-        template = advice_map.get(dim_key, {
-            "advice": f"{dim_name}有待提升，建议加强相关训练。",
-            "example": "",
-        })
+        template = advice_map.get(
+            dim_key,
+            {
+                "advice": f"{dim_name}有待提升，建议加强相关训练。",
+                "example": "",
+            },
+        )
 
         return Suggestion(
             dimension=dim_key,
@@ -535,9 +533,23 @@ class ExpressionCoach:
         clarity = max(1, min(10, clarity))
 
         professional_terms = [
-            "临床", "数据", "研究", "试验", "HbA1c",
-            "%", "患者", "治疗", "疗效", "安全性",
-            "副作用", "依从性", "发生率", "mg", "ml", "剂量", "方案",
+            "临床",
+            "数据",
+            "研究",
+            "试验",
+            "HbA1c",
+            "%",
+            "患者",
+            "治疗",
+            "疗效",
+            "安全性",
+            "副作用",
+            "依从性",
+            "发生率",
+            "mg",
+            "ml",
+            "剂量",
+            "方案",
         ]
         term_count = sum(1 for term in professional_terms if term in message)
         professionalism = min(10, 5 + term_count)
@@ -580,33 +592,155 @@ class ExpressionCoach:
         ]
         for key, name, score in dims:
             if score < 7:
-                suggestions.append(Suggestion(
-                    dimension=key,
-                    current_score=score,
-                    advice=f"{name}得分偏低({score}/10)，建议针对性提升此维度表达能力。",
-                    example="",
-                ))
+                suggestions.append(
+                    Suggestion(
+                        dimension=key,
+                        current_score=score,
+                        advice=f"{name}得分偏低({score}/10)，建议针对性提升此维度表达能力。",
+                        example="",
+                    )
+                )
         return suggestions
 
 
 def calculate_overall_score(
     coverage_result: CoverageResult,
     expression_result: ExpressionResult,
+    turn: int = 1,
 ) -> float:
-    """综合计算最终得分。
+    """综合计算最终得分（严格评分模型）。
 
-    将语义覆盖率和表达能力按 50:50 权重合并为百分制总分。
+    采用多因子加权模型，避免早期轮次虚高：
+    - 覆盖率使用非线性压缩（平方根），防止关键词堆砌拿高分
+    - 表达能力按维度差异化加权（说服力权重最高）
+    - 轮次惩罚因子：前几轮话术简单，应压低基准分
+    - 消息质量因子：过短扣分，深度论述加分
+
+    典型分数区间：
+    - 第1轮简单问候：15-25分
+    - 第2-3轮产品介绍：25-45分
+    - 第4轮+完整论证：40-65分
+    - 优秀表现（多轮积累）：60-80分
 
     Args:
         coverage_result: 语义覆盖检测结果
         expression_result: 表达能力评估结果
+        turn: 当前对话轮次（从1开始），用于轮次惩罚
 
     Returns:
-        综合评分（0-100）
+        综合评分（0-100，实际通常 15-80）
     """
     expr = expression_result.analysis
-    coverage_score = coverage_result.coverage_rate * 50
-    expression_score = (
-        (expr.clarity + expr.professionalism + expr.persuasiveness) / 30 * 50
+
+    coverage_rate = max(0.0, min(1.0, coverage_result.coverage_rate))
+
+    coverage_score = _compress_coverage_score(coverage_rate)
+    expression_score = _calculate_weighted_expression_score(
+        expr.clarity, expr.professionalism, expr.persuasiveness
     )
-    return round(coverage_score + expression_score, 2)
+    raw_total = coverage_score + expression_score
+
+    turn_penalty = _get_turn_penalty_factor(turn)
+    quality_adjustment = _get_message_quality_adjustment(
+        expression_result.raw_message_length or 0, coverage_rate
+    )
+
+    final_score = raw_total * turn_penalty + quality_adjustment
+    return round(max(0.0, min(100.0, final_score)), 0)
+
+
+def _compress_coverage_score(coverage_rate: float) -> float:
+    """将覆盖率映射为得分（非线性压缩）。
+
+    使用平方根函数压缩高覆盖率的边际收益，
+    防止仅靠罗列关键词就获得高分。
+    满分上限 40 分（而非线性模型的 50 分）。
+
+    Examples:
+        1.0 (100%) → 40.0 分
+        0.67 (67%)  → 32.7 分
+        0.33 (33%)  → 23.0 分
+        0.0  (0%)   →  0.0 分
+
+    Args:
+        coverage_rate: 覆盖率（0.0-1.0）
+
+    Returns:
+        压缩后的覆盖率得分（0-40）
+    """
+    import math
+
+    return math.sqrt(coverage_rate) * 40.0
+
+
+def _calculate_weighted_expression_score(
+    clarity: int,
+    professionalism: int,
+    persuasiveness: int,
+) -> float:
+    """计算加权表达能力得分。
+
+    销售场景中说服力最重要（权重 0.5），
+    专业性次之（权重 0.3），清晰度基础（权重 0.2）。
+    满分上限 35 分。
+
+    Args:
+        clarity: 清晰度评分（1-10）
+        professionalism: 专业性评分（1-10）
+        persuasiveness: 说服力评分（1-10）
+
+    Returns:
+        加权表达能力得分（0-35）
+    """
+    weighted = clarity * 0.2 + professionalism * 0.3 + persuasiveness * 0.5
+    return (weighted / 10.0) * 35.0
+
+
+def _get_turn_penalty_factor(turn: int) -> float:
+    """获取轮次惩罚因子。
+
+    早期轮次的话术天然较简单（开场、初步介绍），
+    不应给予高分。随着对话深入，评分标准逐渐放宽。
+
+    Args:
+        turn: 当前轮次（从1开始）
+
+    Returns:
+        惩罚系数（0.7-1.0）
+    """
+    if turn <= 1:
+        return 0.70
+    if turn <= 2:
+        return 0.78
+    if turn <= 3:
+        return 0.86
+    if turn <= 4:
+        return 0.93
+    return 1.0
+
+
+def _get_message_quality_adjustment(
+    message_length: int,
+    coverage_rate: float,
+) -> float:
+    """消息质量调整分。
+
+    过短的消息扣分（缺乏实质内容），
+    有深度的长消息在已有关键词覆盖时小幅加分。
+
+    Args:
+        message_length: 消息字符数
+        coverage_rate: 覆盖率
+
+    Returns:
+        调整分值（-5 到 +4）
+    """
+    if message_length < 15:
+        return -5.0
+    if message_length < 30:
+        return -2.0
+    if message_length > 120 and coverage_rate >= 0.67:
+        return 3.0
+    if message_length > 80 and coverage_rate >= 1.0:
+        return 2.0
+    return 0.0

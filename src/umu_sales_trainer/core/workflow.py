@@ -320,7 +320,10 @@ def _node_synthesize(state: WorkflowState) -> dict[str, Any]:
     coverage = state.get("coverage_result") or CoverageResult()
     expression = state.get("expression_result") or ExpressionResult()
 
-    overall = calculate_overall_score(coverage, expression)
+    messages = state.get("messages", [])
+    turn = sum(1 for m in messages if m.role == "user") + 1
+
+    overall = calculate_overall_score(coverage, expression, turn=turn)
 
     eval_result = EvaluationResult(
         session_id=state.get("session_id", ""),
