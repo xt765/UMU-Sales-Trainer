@@ -520,18 +520,18 @@ def _get_workflow():
 ### 5.1 完整公式
 
 $$
-\text{Score} = \text{clamp}\left(\left(\underbrace{\sqrt{r_c} \times 40}_{\text{Coverage}} + \underbrace{\frac{0.2 C + 0.3 P + 0.5 S}{10} \times 35}_{\text{Expression}}\right) \times \underbrace{p(t)}_{\text{Turn Penalty}} + \underbrace{q(l, r_c)}_{\text{Quality}},\ 0,\ 100\right)
+\text{Score} = \text{clamp}\left(\left(\underbrace{\sqrt{r} \times 40}_{\text{Coverage}} + \underbrace{\frac{0.2 C + 0.3 P + 0.5 S}{10} \times 35}_{\text{Expression}}\right) \times \underbrace{p(t)}_{\text{Turn Penalty}} + \underbrace{q(l, r)}_{\text{Quality}},\ 0,\ 100\right)
 $$
 
 其中：
-- $r_c$ = coverage_rate（0 到 1）
+- $r$ = coverage_rate（0 到 1）
 - $C$ = clarity 评分（1 到 10）
 - $P$ = professionalism 评分（1 到 10）
 - $S$ = persuasiveness 评分（1 到 10）
 - $t$ = 当前轮次（从 1 开始）
 - $l$ = 消息字符数
 - $p(t)$ = 回合惩罚系数
-- $q(l, r_c)$ = 质量调整分
+- $q(l, r)$ = 质量调整分
 
 ### 5.2 各因子对总分的影响权重可视化
 

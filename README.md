@@ -133,25 +133,25 @@ graph LR
 
 ```mermaid
 graph TD
-    User[销售代表] -->|发送话术| WF[LangGraph 工作流]
+    User["销售代表"] -->|"发送话术"| WF["LangGraph 工作流"]
 
-    WF --> PA[ConversationAnalyst<br/>对话分析师]
-    WF --> SE[SemanticCoverageExpert<br/>语义覆盖专家]
-    WF --> EC[ExpressionCoach<br/>表达教练]
+    WF --> PA["ConversationAnalyst / 对话分析师"]
+    WF --> SE["SemanticCoverageExpert / 语义覆盖专家"]
+    WF --> EC["ExpressionCoach / 表达教练"]
 
-    PA -->|stage + intent + objections| SYN[Synthesize 综合]
-    SE -->|coverage_result| SYN
-    EC -->|expression_result| SYN
+    PA -->|"stage + intent + objections"| SYN["Synthesize 综合"]
+    SE -->|"coverage-result"| SYN
+    EC -->|"expression-result"| SYN
 
-    SYN -->|evaluation_result| ROUTER{覆盖率>=80%<br/>且 评分>=70?}
+    SYN -->|"evaluation-result"| ROUTER{"覆盖率>=80% 且 评分>=70?"}
 
-    ROUTER -->|否| GM[GuidanceMentor<br/>智能引导导师]
-    ROUTER -->|是| SKIP[(跳过引导)]
+    ROUTER -->|"否"| GM["GuidanceMentor / 智能引导导师"]
+    ROUTER -->|"是"| SKIP["(跳过引导)"]
 
-    GM -->|guidance_result| SIM[CustomerSimulator<br/>AI 客户模拟器]
+    GM -->|"guidance-result"| SIM["CustomerSimulator / AI 客户模拟器"]
     SKIP --> SIM
 
-    SIM -->|ai_response| User
+    SIM -->|"ai-response"| User
 
     style PA fill:#e1f5fe
     style SE fill:#f3e5f5
@@ -327,7 +327,7 @@ sequenceDiagram
         WF-->>WF: 跳过 guidance (is_actionable=False)
     end
 
-    WF->>CS: _generate_ai_response(state)
+    WF->>CS: generate-ai-response(state)
     CS-->>WF: ai_response (AI 客户回复)
 
     WF-->>API: 完整 WorkflowState
@@ -454,33 +454,34 @@ def _should_generate_guidance(state: WorkflowState) -> str:
 
 ```mermaid
 graph LR
-    subgraph 输入[外部输入]
-        IN1[session_id]
-        IN2[sales_message]
-        IN3[customer_profile]
-        IN4[product_info]
-        IN5[semantic_points]
-        IN6[messages]
+    subgraph IN["外部输入"]
+        IN1["session-id"]
+        IN2["sales-message"]
+        IN3["customer-profile"]
+        IN4["product-info"]
+        IN5["semantic-points"]
+        IN6["messages"]
     end
 
-    subgraph 中间[中间产物]
-        M1[conversation_analysis]
-        M2[coverage_result]
-        M3[expression_result]
-        M4[evaluation_result]
-        M5[guidance_result]
+    subgraph MID["中间产物"]
+        M1["conversation-analysis"]
+        M2["coverage-result"]
+        M3["expression-result"]
+        M4["evaluation-result"]
+        M5["guidance-result"]
     end
 
-    subgraph 输出[最终输出]
-        OUT1[ai_response]
-        OUT2[error]
+    subgraph OUT["最终输出"]
+        OUT1["ai-response"]
+        OUT2["error"]
     end
 
     IN1 & IN2 & IN3 & IN4 & IN5 & IN6 --> M1
-    IN1 & IN2 & IN3 & IN4 & IN5 & IN6 --> M2
-    IN1 & IN2 & IN3 & IN4 & IN5 & IN6 --> M3
+    IN1 & IN2 & IN6 --> M2
+    IN1 & IN2 & IN6 --> M3
 
     M1 & M2 & M3 --> M4
+
     M4 & M2 & M3 & M1 & IN5 & IN3 --> M5
 
     M4 & IN3 & IN4 & M1 & IN6 --> OUT1
@@ -721,7 +722,7 @@ flowchart TD
 采用**平方根非线性压缩**，防止仅靠罗列关键词就获得高分：
 
 $$
-\text{coverage\_score} = \sqrt{\text{coverage\_rate}} \times 40
+\text{CoverageScore} = \sqrt{\text{CoverageRate}} \times 40
 $$
 
 | 覆盖率 | 线性模型得分（旧） | 非线性压缩得分（新） | 压缩效果 |
