@@ -7,6 +7,14 @@
 
 const API_BASE = '/api/v1';
 
+const STAGE_LABELS = {
+  'opening': '开场破冰',
+  'needs_discovery': '需求探查',
+  'presentation': '产品呈现',
+  'objection_handling': '异议处理',
+  'closing': '缔结成交'
+};
+
 const DIMENSION_LABELS = {
   'clarity': '清晰度',
   'professionalism': '专业性',
@@ -300,6 +308,47 @@ function updateSidebarProfile(customer) {
   }
 }
 
+function updateConversationInsight(analysis) {
+  if (!analysis || !analysis.stage) return;
+
+  let insightEl = document.getElementById('conversationInsight');
+  if (!insightEl) {
+    const customerCard = document.querySelector('.customer-card');
+    const coverageCard = document.querySelector('.coverage-card');
+
+    if (customerCard && coverageCard) {
+      insightEl = document.createElement('div');
+      insightEl.id = 'conversationInsight';
+      insightEl.className = 'conversation-insight';
+      customerCard.parentNode.insertBefore(insightEl, coverageCard);
+    }
+  }
+
+  if (!insightEl) return;
+
+  const stageLabel = STAGE_LABELS[analysis.stage] || analysis.stage;
+  const stageClass = `stage-${analysis.stage}`;
+  const sentimentIcon = analysis.sentiment === 'positive' ? 'thumbs-up' : analysis.sentiment === 'cautious' ? 'alert-circle' : 'minus-circle';
+
+  let objectionsHtml = '';
+  if (analysis.objections && analysis.objections.length > 0) {
+    objectionsHtml = '<div class="objection-tags">' +
+      analysis.objections.map(obj => `<span class="objection-tag">${escapeHtml(obj)}</span>`).join('') +
+      '</div>';
+  }
+
+  insightEl.innerHTML = `
+    <div class="insight-header">
+      <span class="stage-badge ${stageClass}">${stageLabel}</span>
+      <i data-lucide="${sentimentIcon}" class="sentiment-icon"></i>
+    </div>
+    ${analysis.intent ? `<p class="intent-text">${escapeHtml(analysis.intent)}</p>` : ''}
+    ${objectionsHtml}
+  `;
+  insightEl.style.display = 'block';
+  lucide.createIcons();
+}
+
 async function createSession() {
   try {
     setLoading(true);
@@ -434,17 +483,10 @@ async function deleteSession() {
 }
 
 function updateGuidancePanel(guidance) {
-  if (!guidance || !guidance.is_actionable) {
-    const existing = document.getElementById('guidancePanel');
-    if (existing) existing.style.display = 'none';
-    return;
-  }
-
   let panel = document.getElementById('guidancePanel');
   if (!panel) {
     panel = document.createElement('div');
     panel.id = 'guidancePanel';
-    panel.className = 'guidance-panel';
     const anchor = document.getElementById('guidancePanelAnchor');
     if (anchor) {
       anchor.appendChild(panel);
@@ -453,26 +495,50 @@ function updateGuidancePanel(guidance) {
     }
   }
 
-  const urgencyIcons = { high: 'alert-triangle', medium: 'alert-circle', low: 'info' };
+  if (!guidance || !guidance.is_actionable) {
+    panel.className = 'guidance-panel guidance-panel--excellent';
+    const summary = guidance?.summary || '表现优秀';
+    panel.innerHTML = `
+      <div class="guidance-header" onclick="toggleGuidance()">
+        <span class="guidance-summary">
+          <i data-lucide="award"></i>
+          <span class="excellent-badge">${escapeHtml(summary) || '🎉 表现优秀，继续保持！'}</span>
+        </span>
+        <i data-lucide="chevron-down" class="guidance-toggle-icon"></i>
+      </div>
+      <div class="guidance-body excellent-detail" style="display:none">
+        ${guidance?.priority_list ? guidance.priority_list.map(item => `
+          <div class="guidance-item urgency-${item.urgency || 'low'}">
+            <div class="gap-text">${escapeHtml(item.gap)}</div>
+            <div class="suggestion-text">${escapeHtml(item.suggestion)}</div>
+            ${item.talking_point ? `<div class="talking-point">${escapeHtml(item.talking_point)}</div>` : ''}
+          </div>
+        `).join('') : '<p>语义覆盖全面，表达能力均衡，暂无紧急改进项。</p>'}
+      </div>
+    `;
+  } else {
+    panel.className = 'guidance-panel';
+    const urgencyIcons = { high: 'alert-triangle', medium: 'alert-circle', low: 'info' };
 
-  panel.innerHTML = `
-    <div class="guidance-header" onclick="toggleGuidance()">
-      <span class="guidance-summary">
-        <i data-lucide="lightbulb"></i>
-        ${escapeHtml(guidance.summary)}
-      </span>
-      <i data-lucide="chevron-down" class="guidance-toggle-icon"></i>
-    </div>
-    <div class="guidance-body">
-      ${guidance.priority_list.map(item => `
-        <div class="guidance-item urgency-${item.urgency}">
-          <div class="gap-text">${escapeHtml(item.gap)}</div>
-          <div class="suggestion-text">${escapeHtml(item.suggestion)}</div>
-          ${item.talking_point ? `<div class="talking-point">${escapeHtml(item.talking_point)}</div>` : ''}
-        </div>
-      `).join('')}
-    </div>
-  `;
+    panel.innerHTML = `
+      <div class="guidance-header" onclick="toggleGuidance()">
+        <span class="guidance-summary">
+          <i data-lucide="lightbulb"></i>
+          ${escapeHtml(guidance.summary)}
+        </span>
+        <i data-lucide="chevron-up" class="guidance-toggle-icon"></i>
+      </div>
+      <div class="guidance-body">
+        ${guidance.priority_list.map(item => `
+          <div class="guidance-item urgency-${item.urgency}">
+            <div class="gap-text">${escapeHtml(item.gap)}</div>
+            <div class="suggestion-text">${escapeHtml(item.suggestion)}</div>
+            ${item.talking_point ? `<div class="talking-point">${escapeHtml(item.talking_point)}</div>` : ''}
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
 
   panel.style.display = 'block';
   lucide.createIcons();
@@ -537,6 +603,10 @@ async function sendMessageToAI(message, isInitial = false) {
 
       if (data.evaluation.overall_score !== undefined) {
         updateOverallScore(data.evaluation.overall_score);
+      }
+
+      if (data.evaluation.conversation_analysis) {
+        updateConversationInsight(data.evaluation.conversation_analysis);
       }
     }
 

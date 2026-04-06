@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from langchain_core.messages import HumanMessage
 
@@ -50,10 +50,14 @@ STAGE_DEFINITIONS = """【销售阶段定义】
 
 OBJECTION_KEYWORDS = {
     "价格": ["贵", "太贵", "预算", "成本", "便宜", "降价", "折扣"],
-    "安全性": ["副作用", "不良反应", "肝肾", "毒性", "风险", "安全吗"],
+    "安全性": ["副作用", "不良反应", "肝肾", "毒性", "风险", "安全吗", "禁忌症", "相互作用"],
     "证据": ["证据", "研究", "试验", "文献", "论文", "数据来源", "第三方"],
     "竞品": ["其他产品", "同类药", "竞品", "对比", "别的品牌", "之前用过"],
     "时机": ["再考虑", "不急", "等等", "下次再说", "暂时不需要"],
+    "用法便利性": ["一天几次", "用法复杂", "不方便", "麻烦", "依从性", "服用方式"],
+    "医保报销": ["医保", "报销", "自费", "进医保", "报销比例", "患者负担"],
+    "处方限制": ["处方", "限制", "适应症", "开药", "非处方"],
+    "疗效疑虑": ["效果不明显", "没效果", "起效慢", "疗效差", "多久见效", "有效率"],
 }
 
 
@@ -95,9 +99,7 @@ class ConversationAnalyst:
         Returns:
             ConversationAnalysis 结构化分析结果
         """
-        prompt = self._build_prompt(
-            sales_message, customer_profile, conversation_history
-        )
+        prompt = self._build_prompt(sales_message, customer_profile, conversation_history)
 
         try:
             response = self._llm.invoke([HumanMessage(content=prompt)])
@@ -134,10 +136,10 @@ class ConversationAnalyst:
         if customer_profile:
             customer_context = f"""
 客户背景：
-- 姓名：{customer_profile.name or '未知'}
-- 职位：{customer_profile.position or '未知'}
-- 关注点：{', '.join(customer_profile.concerns[:3]) if customer_profile.concerns else '未知'}
-- 性格倾向：{customer_profile.personality or '未知'}
+- 姓名：{customer_profile.name or "未知"}
+- 职位：{customer_profile.position or "未知"}
+- 关注点：{", ".join(customer_profile.concerns[:3]) if customer_profile.concerns else "未知"}
+- 性格倾向：{customer_profile.personality or "未知"}
 """
 
         history_context = ""
@@ -164,7 +166,7 @@ class ConversationAnalyst:
 {{
     "stage": "opening|needs_discovery|presentation|objection_handling|closing",
     "intent": "一句话描述这位销售代表想达成什么目标",
-    "objections": ["如果发言中隐含了客户的潜在反对或顾虑，列出关键词；否则为空数组"],
+    "objections": ["如果发言中隐含了客户的潜在反对或顾虑，列出关键词；否则为空数组。常见类别包括：价格/安全性（副作用、禁忌症）/证据/竞品/时机/用法便利性/医保报销/处方限制/疗效疑虑"],
     "sentiment": "positive(积极自信)|neutral(平稳客观)|cautious(谨慎保守)"
 }}"""
 

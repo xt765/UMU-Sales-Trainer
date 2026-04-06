@@ -120,6 +120,7 @@ class EvaluationResponse(BaseModel):
     overall_score: float
     expression_analysis: dict[str, int]
     suggestions: list[dict[str, Any]] = []
+    conversation_analysis: Optional[dict[str, Any]] = None
 
 
 class SessionStatusResponse(BaseModel):
@@ -484,6 +485,7 @@ def _format_evaluation(
     eval_result: EvaluationResult,
     coverage_labels: dict[str, str] | None = None,
     expression_result=None,
+    conversation_analysis=None,
 ) -> dict[str, Any]:
     """格式化评估结果为字典。
 
@@ -491,6 +493,7 @@ def _format_evaluation(
         eval_result: 评估结果对象
         coverage_labels: 语义点ID到中文描述的映射（可选）
         expression_result: ExpressionResult 对象（可选，用于提取 suggestions）
+        conversation_analysis: ConversationAnalysis 对象（可选）
 
     Returns:
         格式化的字典
@@ -519,6 +522,15 @@ def _format_evaluation(
             }
             for s in expression_result.suggestions
         ]
+
+    if conversation_analysis is not None:
+        result["conversation_analysis"] = {
+            "stage": conversation_analysis.stage,
+            "intent": conversation_analysis.intent,
+            "objections": conversation_analysis.objections,
+            "sentiment": conversation_analysis.sentiment,
+            "confidence": conversation_analysis.confidence,
+        }
 
     return result
 
@@ -694,10 +706,11 @@ def send_message(
     coverage_labels = {sp.point_id: sp.description for sp in semantic_points}
 
     expr_result = result.get("expression_result")
+    conv_analysis = result.get("conversation_analysis")
     guide_result = result.get("guidance_result")
 
     eval_dict = (
-        _format_evaluation(evaluation, coverage_labels, expr_result)
+        _format_evaluation(evaluation, coverage_labels, expr_result, conv_analysis)
         if evaluation
         else {
             "coverage_status": {},
