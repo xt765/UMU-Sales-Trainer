@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +27,10 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+env_path = Path(__file__).parent.parent.parent / ".env"
+load_dotenv(env_path)
+logger.info("Loaded .env from %s", env_path)
 
 ALLOWED_ORIGINS = [
     "http://localhost:3000",

@@ -74,9 +74,7 @@ class SemanticEvaluator:
 
         coverage_rate = self._calculate_coverage_rate(coverage_status)
         expression = self._analyze_expression(sales_message, context)
-        overall_score = self._calculate_overall_score(
-            coverage_rate, expression, coverage_status
-        )
+        overall_score = self._calculate_overall_score(coverage_rate, expression, coverage_status)
 
         return EvaluationResult(
             session_id=session_id,
@@ -213,14 +211,43 @@ class SemanticEvaluator:
         Returns:
             表达能力分析结果
         """
-        prompt = (
-            f"分析以下销售话术的表达质量，从清晰度、专业性、说服力三个维度评分。\n"
-            f"话术：{message}\n"
-            f"每个维度1-10分，回复格式：清晰度:X, 专业性:Y, 说服力:Z"
-        )
+        try:
+            prompt = (
+                "你是一位严格的销售话术质量评估专家。请对以下销售话术从三个维度严格评分，"
+                "不要宽容，要客观反映真实水平。\n\n"
+                f"【待评估话术】\n{message}\n\n"
+                "【评分标准（严格执行）】\n"
+                "清晰度（Clarity）：\n"
+                "  1-3分：语句不通顺、无标点或标点混乱、逻辑跳跃、难以理解\n"
+                "  4-5分：基本通顺但有语病、标点缺失、结构松散\n"
+                "  6-7分：通顺完整、有适当标点、结构合理但不够精炼\n"
+                "  8-9分：表达流畅、层次分明、用词准确、易于理解\n"
+                "  10分：精炼有力、环环相扣、一气呵成、极具感染力\n\n"
+                "专业性（Professionalism）：\n"
+                "  1-3分：无专业术语、口语化严重、无数据支撑\n"
+                "  4-5分：有少量术语但使用不当、数据模糊\n"
+                "  6-7分：术语基本准确、有具体数据但引用不规范\n"
+                "  8-9分：专业术语准确、数据引用规范、体现行业认知\n"
+                "  10分：专家级表达、数据详实、深度专业洞察\n\n"
+                "说服力（Persuasiveness）：\n"
+                "  1-3分：无论证逻辑、纯陈述性表达、无行动引导\n"
+                "  4-5分：有简单对比但缺乏力度、无明确利益点\n"
+                "  6-7分：有一定论证、有数据支撑但缺乏情感共鸣\n"
+                "  8-9分：论证充分、数据+对比+痛点结合、有感染力\n"
+                "  10分：无可辩服的逻辑链、直击痛点、强烈行动号召\n\n"
+                "请严格按照以上标准评分。回复格式（仅数字和逗号）：\n"
+                "清晰度:X, 专业性:Y, 说服力:Z"
+            )
 
-        response = self.llm_service.invoke([HumanMessage(content=prompt)])
-        return self._parse_expression_response(response.content)
+            response = self.llm_service.invoke([HumanMessage(content=prompt)])
+            return self._parse_expression_response(response.content)
+        except Exception as e:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "LLM expression analysis failed, using rule-based fallback: %s", e
+            )
+            return self._rule_based_expression_analysis(message)
 
     def _parse_expression_response(self, content: str) -> ExpressionAnalysis:
         """解析LLM表达分析响应。
@@ -256,6 +283,110 @@ class SemanticEvaluator:
 
         return analysis
 
+    def _rule_based_expression_analysis(self, message: str) -> ExpressionAnalysis:
+        """基于规则的表达能力分析（LLM不可用时的降级方案）。
+
+        通过文本特征分析话术质量：
+        - 清晰度：句子长度、标点使用、结构完整性
+        - 专业性：专业术语密度、数据引用
+        - 说服力：数据支撑、对比论证、行动号召
+
+        Args:
+            message: 销售消息
+
+        Returns:
+            表达能力分析结果
+        """
+        import re
+
+        clarity = 5
+        professionalism = 5
+        persuasiveness = 5
+
+        # 清晰度评估 — 多维度严格打分
+        sentences = re.split(r"[。！？!?.]", message)
+        valid_sentences = [s.strip() for s in sentences if len(s.strip()) > 3]
+
+        if valid_sentences:
+            avg_len = sum(len(s) for s in valid_sentences) / len(valid_sentences)
+
+            if 15 <= avg_len <= 50:
+                clarity += 1
+            elif 10 <= avg_len < 15 or 50 < avg_len <= 70:
+                pass
+            elif avg_len < 10 or avg_len > 70:
+                clarity -= 1
+
+            has_comma = "，" in message or "," in message
+            has_pause = "、" in message
+            if has_comma and has_pause:
+                clarity += 1
+            elif has_comma or has_pause:
+                clarity += 0
+
+            long_sentences = sum(1 for s in valid_sentences if len(s) > 80)
+            short_sentences = sum(1 for s in valid_sentences if len(s) < 8)
+            ratio_long = long_sentences / len(valid_sentences)
+            ratio_short = short_sentences / len(valid_sentences)
+
+            if ratio_long > 0.4:
+                clarity -= 1
+            if ratio_short > 0.5:
+                clarity -= 1
+
+            words = re.findall(r"[\u4e00-\u9fff]+", message)
+            unique_words = len(set(words))
+            total_words = len(words)
+            if total_words > 20 and unique_words / total_words < 0.6:
+                clarity -= 1
+
+        else:
+            clarity = 2
+
+        clarity = max(1, min(10, clarity))
+
+        # 专业性评估
+        professional_terms = [
+            "临床",
+            "数据",
+            "研究",
+            "试验",
+            "HbA1c",
+            "%",
+            "患者",
+            "治疗",
+            "疗效",
+            "安全性",
+            "副作用",
+            "依从性",
+            "发生率",
+            "mg",
+            "ml",
+            "剂量",
+            "方案",
+        ]
+        term_count = sum(1 for term in professional_terms if term in message)
+        professionalism = min(10, 5 + term_count)
+
+        # 说服力评估
+        persuasion_signals = [
+            (r"\d+[.]?\d*%", "数据百分比"),
+            (r"相比|远低于|优于|超过|降低|提高", "对比论证"),
+            (r"可以考虑|建议|推荐|作为.*方案", "行动号召"),
+            (r"更重要的是|而且|此外|同时", "递进论述"),
+        ]
+        signal_score = 0
+        for pattern, _ in persuasion_signals:
+            if re.search(pattern, message):
+                signal_score += 1
+        persuasiveness = min(10, 4 + signal_score)
+
+        return ExpressionAnalysis(
+            clarity=clarity,
+            professionalism=professionalism,
+            persuasiveness=persuasiveness,
+        )
+
     def _calculate_overall_score(
         self,
         coverage_rate: float,
@@ -274,6 +405,6 @@ class SemanticEvaluator:
         """
         coverage_score = coverage_rate * 50
         expression_score = (
-            expression.clarity + expression.professionalism + expression.persuasiveness
-        ) / 30 * 50
+            (expression.clarity + expression.professionalism + expression.persuasiveness) / 30 * 50
+        )
         return round(coverage_score + expression_score, 2)

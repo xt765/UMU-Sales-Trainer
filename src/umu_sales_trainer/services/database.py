@@ -289,6 +289,33 @@ class DatabaseService:
                 )
             return None
 
+    def get_all_sessions(self) -> list[SessionModel]:
+        """获取所有非软删除的会话记录。
+
+        按创建时间倒序排列，用于会话列表展示和切换。
+
+        Returns:
+            会话模型实例列表
+        """
+        with self.create_session() as session:
+            results = (
+                session.query(SessionModel)
+                .filter(SessionModel.is_deleted == 0)
+                .order_by(SessionModel.created_at.desc())
+                .all()
+            )
+            return [
+                SessionModel(
+                    id=r.id,
+                    customer_profile=r.customer_profile,
+                    product_info=r.product_info,
+                    status=r.status,
+                    created_at=r.created_at,
+                    ended_at=r.ended_at,
+                )
+                for r in results
+            ]
+
     def get_messages(
         self,
         session_id: str,

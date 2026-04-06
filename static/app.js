@@ -151,8 +151,7 @@ function updateCoverageDisplay(coverageData) {
     
     itemDiv.innerHTML = `
       <div class="item-info">
-        <h4>${escapeHtml(item.name)}</h4>
-        <p>${escapeHtml(item.description)}</p>
+        <h4>${escapeHtml(item.description)}</h4>
       </div>
       <div class="item-status ${statusClass}"></div>
     `;
@@ -173,6 +172,110 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+function updateExpressionDisplay(expression) {
+  if (!expression) return;
+  
+  let exprContainer = document.getElementById('expressionAnalysis');
+  if (!exprContainer) {
+    const coverageSection = document.querySelector('.coverage-section');
+    if (coverageSection) {
+      exprContainer = document.createElement('div');
+      exprContainer.id = 'expressionAnalysis';
+      exprContainer.className = 'expression-analysis';
+      exprContainer.innerHTML = `
+        <h3>表达能力分析</h3>
+        <div class="expression-metrics">
+          <div class="metric" data-metric="clarity">
+            <span class="metric-label">清晰度</span>
+            <span class="metric-value">-</span>
+          </div>
+          <div class="metric" data-metric="professionalism">
+            <span class="metric-label">专业性</span>
+            <span class="metric-value">-</span>
+          </div>
+          <div class="metric" data-metric="persuasiveness">
+            <span class="metric-label">说服力</span>
+            <span class="metric-value">-</span>
+          </div>
+        </div>
+      `;
+      coverageSection.parentNode.insertBefore(exprContainer, coverageSection.nextSibling);
+    }
+  }
+  
+  if (exprContainer) {
+    const clarityEl = exprContainer.querySelector('[data-metric="clarity"] .metric-value');
+    const proEl = exprContainer.querySelector('[data-metric="professionalism"] .metric-value');
+    const persEl = exprContainer.querySelector('[data-metric="persuasiveness"] .metric-value');
+    
+    if (clarityEl) clarityEl.textContent = expression.clarity || 0;
+    if (proEl) proEl.textContent = expression.professionalism || 0;
+    if (persEl) persEl.textContent = expression.persuasiveness || 0;
+    
+    [clarityEl, proEl, persEl].forEach(el => {
+      if (el) {
+        const val = parseInt(el.textContent) || 0;
+        el.className = 'metric-value ' + (val >= 7 ? 'high' : val >= 4 ? 'medium' : 'low');
+      }
+    });
+  }
+}
+
+function updateOverallScore(score) {
+  let scoreEl = document.getElementById('overallScoreValue');
+  if (!scoreEl) {
+    const coverageSection = document.querySelector('.coverage-section');
+    if (coverageSection) {
+      const scoreDiv = document.createElement('div');
+      scoreDiv.className = 'overall-score-display';
+      scoreDiv.innerHTML = `<span>综合评分: </span><strong id="overallScoreValue">-</strong>`;
+      coverageSection.parentNode.insertBefore(scoreDiv, coverageSection.nextSibling);
+      scoreEl = document.getElementById('overallScoreValue');
+    }
+  }
+  if (scoreEl) {
+    scoreEl.textContent = Math.round(score);
+    scoreEl.className = score >= 80 ? 'score-excellent' : score >= 60 ? 'score-good' : 'score-needs-work';
+  }
+}
+
+function updateSidebarProfile(customer) {
+  if (!customer) return;
+  
+  const profileSection = document.querySelector('.customer-profile');
+  if (!profileSection) return;
+  
+  const name = customer.name || '客户';
+  const firstChar = name.charAt(0);
+  const position = customer.position || '';
+  const hospital = customer.hospital || '';
+  const concerns = customer.concerns || [];
+  
+  const avatarEl = profileSection.querySelector('.profile-avatar');
+  if (avatarEl) avatarEl.textContent = firstChar;
+  
+  const nameEl = profileSection.querySelector('.profile-info h3');
+  if (nameEl) {
+    const title = position ? `${name} · ${position}` : name;
+    nameEl.textContent = title;
+  }
+  
+  const posEl = profileSection.querySelector('.profile-info p');
+  if (posEl) posEl.textContent = hospital || '未知机构';
+  
+  const detailsEl = profileSection.querySelector('.profile-details');
+  if (detailsEl && concerns.length > 0) {
+    const iconMap = ['target', 'shield-check', 'file-text', 'heart-pulse', 'trending-up'];
+    detailsEl.innerHTML = concerns.slice(0, 4).map((concern, i) => `
+      <div class="detail-item">
+        <i data-lucide="${iconMap[i % iconMap.length] || 'check'}" class="detail-icon"></i>
+        <span>${escapeHtml(concern)}</span>
+      </div>
+    `).join('');
+    lucide.createIcons();
+  }
+}
+
 async function createSession() {
   try {
     setLoading(true);
@@ -182,17 +285,36 @@ async function createSession() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         customer_profile: {
-          industry: "医疗",
+          name: "张医生",
           position: "内分泌科主任",
-          concerns: ["安全性", "疗效", "患者依从性"],
-          personality: "专业严谨",
-          objection_tendencies: ["价格高", "证据不足"]
+          hospital: "市第一人民医院",
+          personality_type: "ANALYTICAL"
         },
         product_info: {
-          name: "新型降糖药",
-          description: "GLP-1受体激动剂",
-          core_benefits: ["降糖效果好", "低血糖风险低", "一周一次给药"],
-          key_selling_points: {}
+          product_name: "糖宁胶囊",
+          category: "降血糖药物",
+          core_benefits: [
+            "HbA1c改善: 平均降低0.8%",
+            "安全性高: 低血糖风险<1%",
+            "服用方便: 每日一次"
+          ],
+          key_selling_points: {
+            SP_EFFICACY: {
+              description: "显著降低HbA1c水平",
+              keywords: ["HbA1c", "降糖", "疗效"],
+              weight: 1.0
+            },
+            SP_SAFETY: {
+              description: "低血糖风险极低",
+              keywords: ["安全", "副作用", "低血糖"],
+              weight: 0.9
+            },
+            SP_CONVENIENCE: {
+              description: "每日一次服药便利",
+              keywords: ["方便", "依从性", "每日"],
+              weight: 0.8
+            }
+          }
         }
       })
     });
@@ -219,12 +341,24 @@ async function createSession() {
     updateTopBarSession();
     updateDrawerBadge();
     clearChatMessages();
+    resetChatToInitialState();
+    resetCoverageDisplay();
+    
+    updateSidebarProfile({
+      name: "张医生",
+      position: "内分泌科主任",
+      hospital: "市第一人民医院",
+      concerns: ["HbA1c控制效果", "低血糖风险", "患者依从性"]
+    });
+    
+    const exprEl = document.getElementById('expressionAnalysis');
+    if (exprEl) exprEl.remove();
+    const scoreEl = document.querySelector('.overall-score-display');
+    if (scoreEl) scoreEl.remove();
     
     showToast('会话创建成功！', 'success');
     
     updateButtonStates();
-    
-    await sendMessageToAI('', true);
     
   } catch (error) {
     console.error('Error creating session:', error);
@@ -277,9 +411,9 @@ async function sendMessageToAI(message, isInitial = false) {
   if (!appState.currentSessionId) return;
   
   try {
-    addTypingIndicator();
+    if (!isInitial) addTypingIndicator();
     
-    const payload = isInitial ? { content: "请开始对话" } : { content: message };
+    const payload = isInitial ? { content: "" } : { content: message };
     
     const response = await fetch(`${API_BASE}/sessions/${appState.currentSessionId}/messages`, {
       method: 'POST',
@@ -287,7 +421,7 @@ async function sendMessageToAI(message, isInitial = false) {
       body: JSON.stringify(payload)
     });
     
-    removeTypingIndicator();
+    if (!isInitial) removeTypingIndicator();
     
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
@@ -295,23 +429,45 @@ async function sendMessageToAI(message, isInitial = false) {
     
     const data = await response.json();
     
-    if (data.ai_response && !isInitial) {
-      addMessage(data.ai_response, false);
-    } else if (data.ai_response && isInitial) {
+    if (data.ai_response && data.ai_response.trim()) {
       addMessage(data.ai_response, false);
     }
     
-    if (data.evaluation && data.evaluation.coverage_status) {
-      const coverageData = Object.entries(data.evaluation.coverage_status).map(([name, status]) => ({
-        name,
-        description: name,
-        status: status
-      }));
+    if (data.evaluation) {
+      appState.lastEvaluation = data.evaluation;
       
-      if (coverageData.length > 0) {
-        updateCoverageDisplay(coverageData);
+      if (data.evaluation.coverage_status) {
+        const SEMANTIC_LABELS = {
+          'SP-001': 'HbA1c改善',
+          'SP-002': '安全性',
+          'SP-003': '服用方便',
+          'SP_EFFICACY': '疗效数据',
+          'SP_SAFETY': '安全性论证',
+          'SP_CONVENIENCE': '用药便利'
+        };
+        
+        const coverageData = Object.entries(data.evaluation.coverage_status).map(([id, status]) => ({
+          name: id,
+          description: SEMANTIC_LABELS[id] || id,
+          status: status
+        }));
+        
+        if (coverageData.length > 0) {
+          updateCoverageDisplay(coverageData);
+        }
+      }
+      
+      if (data.evaluation.expression_analysis) {
+        updateExpressionDisplay(data.evaluation.expression_analysis);
+      }
+      
+      if (data.evaluation.overall_score !== undefined) {
+        updateOverallScore(data.evaluation.overall_score);
       }
     }
+    
+    appState.messageCount++;
+    updateTopBarSession();
     
     if (data.is_complete) {
       showToast('训练完成！', 'success');
@@ -319,7 +475,7 @@ async function sendMessageToAI(message, isInitial = false) {
     
   } catch (error) {
     console.error('Error sending message:', error);
-    removeTypingIndicator();
+    if (!isInitial) removeTypingIndicator();
     showToast('发送消息失败，请重试', 'error');
   }
 }
@@ -368,7 +524,83 @@ elements.chatInput.addEventListener('keydown', (e) => {
 document.addEventListener('DOMContentLoaded', () => {
   updateButtonStates();
   initDrawerHover();
+  restoreSessionsFromBackend();
 });
+
+async function restoreSessionsFromBackend() {
+  try {
+    const resp = await fetch(`${API_BASE}/sessions`);
+    if (!resp.ok) return;
+    
+    const data = await resp.json();
+    
+    if (data.sessions && data.sessions.length > 0) {
+      appState.sessions = data.sessions.map((s, idx) => ({
+        id: s.session_id,
+        number: idx + 1,
+        startTime: new Date(s.created_at),
+        turns: s.message_count || 0,
+        status: s.status || 'active',
+        coverage: 0
+      }));
+      
+      const activeSession = appState.sessions.find(s => s.status === 'active');
+      
+      if (activeSession && !appState.currentSessionId) {
+        appState.currentSessionId = activeSession.id;
+        appState.currentSessionNumber = activeSession.number;
+        appState.messageCount = Math.floor(activeSession.turns / 2);
+        
+        try {
+          const msgsResp = await fetch(`${API_BASE}/sessions/${activeSession.id}/messages`);
+          if (msgsResp.ok) {
+            const msgsData = await msgsResp.json();
+            clearChatMessages();
+            if (msgsData.messages && msgsData.messages.length > 0) {
+              for (const msg of msgsData.messages) {
+                addMessage(msg.content, msg.role === 'user', false);
+              }
+            } else {
+              resetChatToInitialState();
+            }
+          }
+          
+          const evalResp = await fetch(`${API_BASE}/sessions/${activeSession.id}/evaluation`);
+          if (evalResp.ok) {
+            const evalData = await evalResp.json();
+            if (evalData.coverage_status) {
+        const coverageData = Object.entries(evalData.coverage_status).map(([id, status]) => ({
+          name: id,
+          description: evalData.coverage_labels?.[id] || id,
+          status: status
+        }));
+              if (coverageData.length > 0) updateCoverageDisplay(coverageData);
+            }
+            if (evalData.expression_analysis) updateExpressionDisplay(evalData.expression_analysis);
+            if (evalData.overall_score !== undefined) updateOverallScore(evalData.overall_score);
+          }
+        } catch (e) {
+          console.warn('Failed to restore session details:', e);
+          resetChatToInitialState();
+          resetCoverageDisplay();
+        }
+        
+        updateTopBarSession();
+        updateSidebarProfile({
+          name: "张医生",
+          position: "内分泌科主任",
+          hospital: "市第一人民医院",
+          concerns: ["HbA1c控制效果", "低血糖风险", "患者依从性"]
+        });
+      }
+      
+      updateDrawerBadge();
+      loadSessionList();
+    }
+  } catch (e) {
+    console.warn('Failed to restore sessions from backend:', e);
+  }
+}
 
 function updateTopBarSession() {
   if (!elements.topbarSessionInfo) return;
@@ -406,8 +638,8 @@ function resetChatToInitialState() {
       <div class="message ai">
         <div class="message-avatar">AI</div>
         <div class="message-content">
-          您好！我是您的AI销售训练助手。今天我们将模拟一场与张主任的销售对话。<br><br>
-          张主任是内分泌科主任，关注糖尿病控制率和药物安全性，注重循证医学证据。<br><br>
+          您好！我是您的AI销售训练助手。今天我们将模拟一场与张主任（内分泌科主任）关于<strong>糖宁胶囊</strong>的销售对话。<br><br>
+          张主任关注：HbA1c改善效果、药物安全性、患者依从性，注重循证医学证据。<br><br>
           请开始您的销售开场...
         </div>
       </div>
@@ -417,9 +649,9 @@ function resetChatToInitialState() {
 
 function resetCoverageDisplay() {
   updateCoverageDisplay([
-    { name: 'HbA1c 改善', description: '提及降低糖化血红蛋白效果', status: 'not-covered' },
-    { name: '低血糖风险', description: '提及低血糖风险低', status: 'not-covered' },
-    { name: '用药便利性', description: '提及一周一次给药', status: 'not-covered' }
+    { name: 'SP-001', description: 'HbA1c改善', status: 'not-covered' },
+    { name: 'SP-002', description: '安全性', status: 'not-covered' },
+    { name: 'SP-003', description: '服用方便', status: 'not-covered' }
   ]);
 }
 
@@ -514,9 +746,86 @@ async function switchSession(sessionId) {
     return;
   }
   
-  console.log('Switch to session:', sessionId);
-  closeDrawer();
-  showToast('会话切换功能开发中...', 'warning');
+  try {
+    setLoading(true);
+    closeDrawer();
+    
+    const [msgsResp, evalResp] = await Promise.all([
+      fetch(`${API_BASE}/sessions/${sessionId}/messages`),
+      fetch(`${API_BASE}/sessions/${sessionId}/evaluation`),
+    ]);
+    
+    if (!msgsResp.ok) throw new Error(`Messages HTTP ${msgsResp.status}`);
+    
+    const msgsData = await msgsResp.json();
+    const evalData = evalResp.ok ? await evalResp.json() : null;
+    
+    appState.currentSessionId = sessionId;
+    
+    const session = appState.sessions.find(s => s.id === sessionId);
+    if (session) {
+      appState.currentSessionNumber = session.number;
+      appState.messageCount = session.turns || 0;
+    } else {
+      const idx = appState.sessions.findIndex(s => s.id === sessionId);
+      appState.currentSessionNumber = idx >= 0 ? idx + 1 : appState.sessions.length + 1;
+      appState.messageCount = msgsData.total ? Math.floor(msgsData.total / 2) : 0;
+    }
+    
+    clearChatMessages();
+    
+    if (msgsData.messages && msgsData.messages.length > 0) {
+      for (const msg of msgsData.messages) {
+        const isUser = msg.role === 'user';
+        addMessage(msg.content, isUser, false);
+      }
+    } else {
+      resetChatToInitialState();
+    }
+    
+    resetCoverageDisplay();
+    
+    const exprEl = document.getElementById('expressionAnalysis');
+    if (exprEl) exprEl.remove();
+    const scoreEl = document.querySelector('.overall-score-display');
+    if (scoreEl) scoreEl.remove();
+    
+    if (evalData && evalData.coverage_status) {
+      const coverageData = Object.entries(evalData.coverage_status).map(([id, status]) => ({
+        name: id,
+        description: evalData.coverage_labels?.[id] || id,
+        status: status
+      }));
+      
+      if (coverageData.length > 0) updateCoverageDisplay(coverageData);
+    }
+    
+    if (evalData && evalData.expression_analysis) {
+      updateExpressionDisplay(evalData.expression_analysis);
+    }
+    
+    if (evalData && evalData.overall_score !== undefined) {
+      updateOverallScore(evalData.overall_score);
+    }
+    
+    updateTopBarSession();
+    updateSidebarProfile({
+      name: "张医生",
+      position: "内分泌科主任",
+      hospital: "市第一人民医院",
+      concerns: ["HbA1c控制效果", "低血糖风险", "患者依从性"]
+    });
+    updateButtonStates();
+    loadSessionList();
+    
+    showToast(`已切换到训练 #${appState.currentSessionNumber}`, 'success');
+    
+  } catch (error) {
+    console.error('Error switching session:', error);
+    showToast('切换会话失败，请重试', 'error');
+  } finally {
+    setLoading(false);
+  }
 }
 
 function clearHistory() {

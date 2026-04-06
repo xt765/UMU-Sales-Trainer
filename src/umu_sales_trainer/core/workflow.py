@@ -16,11 +16,14 @@ from langgraph.graph import END, StateGraph
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
+from umu_sales_trainer.core.evaluator import SemanticEvaluator
 from umu_sales_trainer.models.conversation import Message
 from umu_sales_trainer.models.customer import CustomerProfile
 from umu_sales_trainer.models.evaluation import EvaluationResult
 from umu_sales_trainer.models.product import ProductInfo
 from umu_sales_trainer.models.semantic import SemanticPoint
+from umu_sales_trainer.services.embedding import EmbeddingService
+from umu_sales_trainer.services.llm import create_llm
 
 logger = logging.getLogger(__name__)
 
@@ -166,34 +169,67 @@ def _node_analyze(state: WorkflowState) -> WorkflowState:
 
 
 def _node_evaluate(state: WorkflowState) -> WorkflowState:
-    """评估节点：评估语义点覆盖。
+    """评估节点：使用三层检测机制评估语义点覆盖。
 
-    根据分析结果评估语义点覆盖情况。
-    如果有语义点未覆盖或覆盖率低于阈值，触发引导节点。
+    调用 SemanticEvaluator 执行完整的三层语义检测：
+    - 第一层：关键词匹配（权重 0.2）
+    - 第二层：Embedding 相似度（权重 0.3）
+    - 第三层：LLM 深度判断（权重 0.5）
+    同时进行表达能力分析（AgenticRAG）。
 
     Args:
         state: 当前工作流状态
 
     Returns:
-        更新后的工作流状态，包含评估结果
+        更新后的工作流状态，包含完整评估结果
     """
     semantic_points = state.get("semantic_points", [])
-    coverage_status = {sp.point_id: "covered" for sp in semantic_points}
+    sales_message = state.get("sales_message", "")
+    session_id = state.get("session_id", "unknown")
 
-    coverage_rate = (
-        sum(1 for v in coverage_status.values() if v == "covered") / len(semantic_points)
-        if semantic_points
-        else 1.0
-    )
+    if not semantic_points or not sales_message:
+        logger.warning("Missing semantic_points or sales_message, using default evaluation")
+        coverage_status = {sp.point_id: "covered" for sp in semantic_points}
+        state["evaluation_result"] = EvaluationResult(
+            session_id=session_id,
+            coverage_status=coverage_status,
+            coverage_rate=1.0 if coverage_status else 0.0,
+            overall_score=100.0 if coverage_status else 0.0,
+        )
+        state["next_node"] = "simulate"
+        return state
 
-    state["evaluation_result"] = EvaluationResult(
-        session_id=state.get("session_id", ""),
-        coverage_status=coverage_status,
-        coverage_rate=coverage_rate,
-        overall_score=coverage_rate * 100,
-    )
+    try:
+        embedding_service = EmbeddingService()
+        llm_service = create_llm("dashscope")
+        evaluator = SemanticEvaluator(embedding_service, llm_service)
 
-    state["next_node"] = "guidance" if coverage_rate < 0.8 else "simulate"
+        context = {"session_id": session_id}
+        evaluation = evaluator.evaluate(sales_message, semantic_points, context)
+
+        logger.info(
+            "Evaluation completed: coverage_rate=%.2f, overall_score=%.1f, "
+            "expression=(clarity=%d, pro=%d, pers=%d)",
+            evaluation.coverage_rate,
+            evaluation.overall_score,
+            evaluation.expression_analysis.clarity,
+            evaluation.expression_analysis.professionalism,
+            evaluation.expression_analysis.persuasiveness,
+        )
+
+        state["evaluation_result"] = evaluation
+    except Exception as e:
+        logger.error("SemanticEvaluator failed, using fallback: %s", e)
+        coverage_status = {sp.point_id: "covered" for sp in semantic_points}
+        state["evaluation_result"] = EvaluationResult(
+            session_id=session_id,
+            coverage_status=coverage_status,
+            coverage_rate=1.0,
+            overall_score=100.0,
+        )
+
+    evaluation = state["evaluation_result"]
+    state["next_node"] = "guidance" if evaluation.coverage_rate < 0.8 else "simulate"
     return state
 
 
@@ -287,40 +323,46 @@ def _try_llm_generation(
     """
     try:
         from umu_sales_trainer.services.llm import LLMServicesError, create_llm
+        from langchain_core.messages import AIMessage
 
-        # 尝试创建LLM实例（会检查API key）
         llm = create_llm("dashscope")
 
-        # 构建系统提示
-        system_prompt = f"""你是一位{customer.position}，正在与一位医药销售代表进行产品介绍对话。
+        customer_name = getattr(customer, "name", None) or customer.position
+        customer_hospital = getattr(customer, "hospital", "") or "某医院"
 
-客户画像：
-- 行业：{customer.industry}
+        system_prompt = f"""【角色设定】
+你正在扮演 **{customer_name}**（{customer.position}，就职于{customer_hospital}）。
+你是客户（医生/采购方），坐在你对面的是一位**医药销售代表**。
+
+【你的画像】
+- 姓名：{customer_name}
 - 职位：{customer.position}
-- 关注点：{", ".join(customer.concerns) if customer.concerns else "未指定"}
-- 性格特点：{customer.personality}
-- 常见异议倾向：{", ".join(customer.objection_tendencies) if customer.objection_tendencies else "无"}
+- 机构：{customer_hospital}
+- 性格：{customer.personality or '专业审慎'}
+- 核心关注点：{", ".join(customer.concerns[:3]) if customer.concerns else '疗效、安全性、价格'}
 
-请以该客户的身份自然地回应销售代表的话术。你的回应应该：
-1. 符合{customer.position}的专业身份和性格特点
-2. 基于之前的对话历史保持连贯性
-3. 自然地提出相关问题或表达关切（如安全性、价格、疗效等）
-4. 回应长度控制在50-150字之间
-5. 使用中文回答"""
+【对话规则】
+1. 你是**客户**，对方是**销售代表**。不要混淆角色。
+2. 以"{customer_name}"或"我"自称，称呼对方为"您"或"你们"。
+3. 回应要符合{customer.position}的专业身份和性格特点。
+4. 自然地提出专业问题或表达关切（围绕关注点展开）。
+5. 回应长度控制在50-150字之间。
+6. 使用中文回答。"""
 
-        # 构建消息列表
         messages = [SystemMessage(content=system_prompt)]
 
-        # 添加历史对话
-        for msg in history[-6:]:  # 最近6轮对话作为上下文
+        for msg in history[-6:]:
             if msg.role == "user":
-                messages.append(HumanMessage(content=msg.content))
+                messages.append(
+                    HumanMessage(content=f"[销售代表]: {msg.content}")
+                )
             elif msg.role == "assistant":
-                messages.append(HumanMessage(content=f"[客户 previous response]: {msg.content}"))
+                messages.append(AIMessage(content=msg.content))
 
-        # 添加当前用户消息
         if sales_msg:
-            messages.append(HumanMessage(content=sales_msg))
+            messages.append(
+                HumanMessage(content=f"[销售代表]: {sales_msg}")
+            )
 
         # 调用LLM
         response = llm.invoke(messages)

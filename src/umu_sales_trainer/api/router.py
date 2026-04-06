@@ -81,6 +81,7 @@ class EvaluationResponse(BaseModel):
     Attributes:
         session_id: 会话ID
         coverage_status: 语义点覆盖状态
+        coverage_labels: 语义点ID到中文标签的映射
         coverage_rate: 覆盖率
         overall_score: 综合评分
         expression_analysis: 表达能力分析
@@ -88,6 +89,7 @@ class EvaluationResponse(BaseModel):
 
     session_id: str
     coverage_status: dict[str, str]
+    coverage_labels: dict[str, str]
     coverage_rate: float
     overall_score: float
     expression_analysis: dict[str, int]
@@ -141,8 +143,53 @@ class MessageResponse(BaseModel):
     created_at: datetime
 
 
+class SessionListItem(BaseModel):
+    """会话列表项模型。
+
+    Attributes:
+        session_id: 会话ID
+        status: 会话状态
+        created_at: 创建时间
+        message_count: 消息轮次数量
+    """
+
+    session_id: str
+    status: str
+    created_at: datetime
+    message_count: int
+
+
+class SessionListResponse(BaseModel):
+    """会话列表响应模型。
+
+    Attributes:
+        sessions: 会话列表
+        total: 总数
+    """
+
+    sessions: list[SessionListItem]
+    total: int
+
+
+class MessagesListResponse(BaseModel):
+    """消息列表响应模型。
+
+    Attributes:
+        session_id: 会话ID
+        messages: 消息列表
+        total: 消息总数
+    """
+
+    session_id: str
+    messages: list[MessageResponse]
+    total: int
+
+
 def _build_customer_profile(data: dict[str, Any]) -> CustomerProfile:
     """构建客户画像对象。
+
+    支持前端传入的 name/hospital/personality_type 字段映射，
+    并根据职位自动生成合理的关注点。
 
     Args:
         data: 客户画像数据字典
@@ -150,11 +197,29 @@ def _build_customer_profile(data: dict[str, Any]) -> CustomerProfile:
     Returns:
         CustomerProfile 实例
     """
+    position = data.get("position", "")
+
+    _PERSONALITY_MAP = {
+        "ANALYTICAL": "专业严谨，注重数据和循证医学",
+        "DRIVER": "果断直接，注重效率和结果",
+        "EXPRESSIVE": "热情开放，注重创新和关系",
+        "AMIABLE": "温和谨慎，注重安全和信任",
+    }
+
+    _CONCERNS_BY_POSITION: dict[str, list[str]] = {
+        "内分泌科主任": ["HbA1c控制效果", "低血糖风险", "患者依从性"],
+        "医生": ["疗效", "安全性", "副作用"],
+        "采购经理": ["价格", "性价比", "供货稳定性"],
+    }
+
     return CustomerProfile(
-        industry=data.get("industry", ""),
-        position=data.get("position", ""),
-        concerns=data.get("concerns", []),
-        personality=data.get("personality", ""),
+        name=data.get("name", ""),
+        hospital=data.get("hospital", ""),
+        industry=data.get("industry", "医疗"),
+        position=position,
+        concerns=data.get("concerns") or _CONCERNS_BY_POSITION.get(position, ["疗效", "安全性"]),
+        personality=data.get("personality")
+        or _PERSONALITY_MAP.get(data.get("personality_type", ""), ""),
         objection_tendencies=data.get("objection_tendencies", []),
     )
 
@@ -206,80 +271,137 @@ def _build_semantic_points(
 def _build_semantic_points_from_product(product: ProductInfo) -> list[SemanticPoint]:
     """从产品信息构建语义点列表。
 
-    将产品的核心优势(key_selling_points)转换为语义点格式，
-    用于三层检测机制评估。
+    固定使用 core_benefits 中的语义点（通常3个），不动态增减。
+    key_selling_points 中的关键词仅用于补充同义语义点的检测关键词，
+    不生成额外语义点，确保前端显示的语义点数量始终一致。
 
     Args:
         product: 产品信息对象
 
     Returns:
-        SemanticPoint 列表
+        固定数量的 SemanticPoint 列表
     """
-    semantic_points = []
+    semantic_points: list[SemanticPoint] = []
 
-    # 从核心优势生成语义点
-    if product.core_benefits:
-        for idx, benefit in enumerate(product.core_benefits, 1):
-            # 解析benefit字符串（可能包含冒号分隔的描述）
-            if isinstance(benefit, str) and ":" in benefit:
-                parts = benefit.split(":", 1)
-                title = parts[0].strip()
-                description = parts[1].strip() if len(parts) > 1 else title
-            else:
-                title = str(benefit)
-                description = str(benefit)
+    if not product.core_benefits:
+        return _get_default_semantic_points()
 
-            # 从标题和描述中提取关键词
-            keywords = _extract_keywords(f"{title} {description}")
+    for idx, benefit in enumerate(product.core_benefits, 1):
+        if isinstance(benefit, dict):
+            point_id = benefit.get("id", f"SP-{idx:03d}")
+            description = benefit.get("description", str(benefit))
+        elif isinstance(benefit, str) and ":" in benefit:
+            parts = benefit.split(":", 1)
+            point_id = parts[0].strip()
+            description = parts[1].strip() if len(parts) > 1 else point_id
+        elif hasattr(benefit, "id") and hasattr(benefit, "description"):
+            point_id = getattr(benefit, "id", f"SP-{idx:03d}")
+            description = getattr(benefit, "description", "")
+        else:
+            point_id = f"SP-{idx:03d}"
+            description = str(benefit)
 
-            semantic_points.append(
-                SemanticPoint(
-                    point_id=f"SP-{idx:03d}",
-                    description=description,
-                    keywords=keywords,
-                    weight=1.0,
-                )
+        base_keywords = _extract_keywords(f"{point_id} {description}")
+
+        extra_keywords = _find_matching_ksp_keywords(point_id, description, product)
+
+        all_keywords = list(set(base_keywords + extra_keywords))
+
+        weight = _infer_weight_from_id(point_id)
+
+        semantic_points.append(
+            SemanticPoint(
+                point_id=point_id,
+                description=description,
+                keywords=all_keywords,
+                weight=weight,
             )
+        )
 
-    # 从key_selling_points添加额外语义点
-    if product.key_selling_points:
-        for sp_id, sp in product.key_selling_points.items():
-            # 跳过已存在的语义点
-            existing_ids = {p.point_id for p in semantic_points}
-            if sp_id in existing_ids:
-                continue
-
-            keywords = _extract_keywords(
-                f"{sp.description} {' '.join(sp.keywords)} {' '.join(sp.sample_phrases)}"
-            )
-
-            semantic_points.append(
-                SemanticPoint(
-                    point_id=sp_id,
-                    description=sp.description,
-                    keywords=keywords,
-                    weight=sp.weight if hasattr(sp, "weight") else 1.0,
-                )
-            )
-
-    # 如果仍然没有语义点，提供默认的通用语义点
     if not semantic_points:
-        default_points = [
-            ("SP-001", "产品介绍", ["产品", "介绍", "特点"]),
-            ("SP-002", "疗效效果", ["效果", "疗效", "改善"]),
-            ("SP-003", "安全性", ["安全", "副作用", "不良反应"]),
-        ]
-        for pid, desc, kws in default_points:
-            semantic_points.append(
-                SemanticPoint(
-                    point_id=pid,
-                    description=desc,
-                    keywords=kws,
-                    weight=1.0,
-                )
-            )
+        return _get_default_semantic_points()
 
     return semantic_points
+
+
+def _find_matching_ksp_keywords(
+    benefit_id: str,
+    benefit_description: str,
+    product: ProductInfo,
+) -> list[str]:
+    """从 key_selling_points 中查找与当前 core_benefit 匹配的关键词进行补充。
+
+    通过 ID 关键词和描述文本相似度双重匹配，将 key_selling_points 中
+    更丰富的关键词信息合并到对应的 core_benefit 语义点上。
+
+    Args:
+        benefit_id: 当前 core_benefit 的 ID（如 SP_SAFETY）
+        benefit_description: 当前 core_benefit 的中文描述
+        product: 完整的产品信息对象
+
+    Returns:
+        补充的关键词列表
+    """
+    if not product.key_selling_points:
+        return []
+
+    matched_keywords: list[str] = []
+    benefit_kw_set = set(_extract_keywords(f"{benefit_id} {benefit_description}"))
+
+    for sp_id, sp in product.key_selling_points.items():
+        sp_kws = getattr(sp, "keywords", [])
+        sp_desc = getattr(sp, "description", "")
+
+        sp_kw_set = set(_extract_keywords(f"{sp_id} {sp_desc} {' '.join(sp_kws)}"))
+
+        if sp_kw_set and benefit_kw_set:
+            overlap_ratio = len(sp_kw_set & benefit_kw_set) / max(len(sp_kw_set), 1)
+            if overlap_ratio > 0.15:
+                matched_keywords.extend(sp_kws)
+                sample_phrases = getattr(sp, "sample_phrases", [])
+                if sample_phrases:
+                    matched_keywords.extend(_extract_keywords(" ".join(sample_phrases)))
+
+    return matched_keywords
+
+
+def _infer_weight_from_id(point_id: str) -> float:
+    """根据语义点ID推断权重值。
+
+    安全性和疗效类语义点赋予较高权重，便利性等次要维度权重略低。
+
+    Args:
+        point_id: 语义点标识符
+
+    Returns:
+        权重值（1.0-1.5）
+    """
+    id_upper = point_id.upper()
+    if any(kw in id_upper for kw in ("SAFETY", "EFFICACY")):
+        return 1.2
+    return 1.0
+
+
+def _get_default_semantic_points() -> list[SemanticPoint]:
+    """当产品无 core_benefits 时返回默认语义点。
+
+    Returns:
+        包含3个通用语义点的列表
+    """
+    return [
+        SemanticPoint(
+            point_id="SP-001", description="产品介绍", keywords=["产品", "介绍", "特点"], weight=1.0
+        ),
+        SemanticPoint(
+            point_id="SP-002", description="疗效效果", keywords=["效果", "疗效", "改善"], weight=1.2
+        ),
+        SemanticPoint(
+            point_id="SP-003",
+            description="安全性",
+            keywords=["安全", "副作用", "不良反应"],
+            weight=1.2,
+        ),
+    ]
 
 
 def _extract_keywords(text: str) -> list[str]:
@@ -331,17 +453,20 @@ def _extract_keywords(text: str) -> list[str]:
     return keywords[:10]  # 限制最多10个关键词
 
 
-def _format_evaluation(eval_result: EvaluationResult) -> dict[str, Any]:
+def _format_evaluation(
+    eval_result: EvaluationResult, coverage_labels: dict[str, str] | None = None
+) -> dict[str, Any]:
     """格式化评估结果为字典。
 
     Args:
         eval_result: 评估结果对象
+        coverage_labels: 语义点ID到中文描述的映射（可选）
 
     Returns:
         格式化的字典
     """
     expr = eval_result.expression_analysis
-    return {
+    result = {
         "coverage_status": eval_result.coverage_status,
         "coverage_rate": eval_result.coverage_rate,
         "overall_score": eval_result.overall_score,
@@ -351,6 +476,9 @@ def _format_evaluation(eval_result: EvaluationResult) -> dict[str, Any]:
             "persuasiveness": expr.persuasiveness,
         },
     }
+    if coverage_labels is not None:
+        result["coverage_labels"] = coverage_labels
+    return result
 
 
 @router.post("/sessions", response_model=CreateSessionResponse, status_code=status.HTTP_201_CREATED)
@@ -448,6 +576,11 @@ def send_message(
     # 构建语义点列表（从产品信息的core_benefits和selling_points生成）
     semantic_points = _build_semantic_points_from_product(product)
 
+    # 拼接全程用户消息用于累积式语义评估
+    all_user_messages = [m.content for m in messages if m.role == "user"]
+    all_user_messages.append(request.content)
+    cumulative_sales_text = "\n".join(all_user_messages)
+
     messages_for_workflow = [
         Message(
             session_id=session_id,
@@ -460,7 +593,8 @@ def send_message(
 
     workflow_state: WorkflowState = {
         "session_id": session_id,
-        "sales_message": request.content,
+        "sales_message": cumulative_sales_text,
+        "current_message": request.content,
         "customer_profile": customer,
         "product_info": product,
         "conversation_history": messages_for_workflow,
@@ -492,11 +626,14 @@ def send_message(
         turn=turn,
     )
 
+    coverage_labels = {sp.point_id: sp.description for sp in semantic_points}
+
     eval_dict = (
-        _format_evaluation(evaluation)
+        _format_evaluation(evaluation, coverage_labels)
         if evaluation
         else {
             "coverage_status": {},
+            "coverage_labels": coverage_labels,
             "coverage_rate": 0.0,
             "overall_score": 0.0,
             "expression_analysis": {"clarity": 0, "professionalism": 0, "persuasiveness": 0},
@@ -541,6 +678,7 @@ def get_evaluation(session_id: str) -> EvaluationResponse:
         return EvaluationResponse(
             session_id=session_id,
             coverage_status={},
+            coverage_labels={},
             coverage_rate=0.0,
             overall_score=0.0,
             expression_analysis={"clarity": 0, "professionalism": 0, "persuasiveness": 0},
@@ -556,6 +694,7 @@ def get_evaluation(session_id: str) -> EvaluationResponse:
         return EvaluationResponse(
             session_id=session_id,
             coverage_status={},
+            coverage_labels={},
             coverage_rate=0.0,
             overall_score=0.0,
             expression_analysis={"clarity": 0, "professionalism": 0, "persuasiveness": 0},
@@ -590,9 +729,12 @@ def get_evaluation(session_id: str) -> EvaluationResponse:
             expression_analysis={"clarity": 0, "professionalism": 0, "persuasiveness": 0},
         )
 
+    coverage_labels = {sp.point_id: sp.description for sp in semantic_points}
+
     return EvaluationResponse(
         session_id=session_id,
         coverage_status=evaluation.coverage_status,
+        coverage_labels=coverage_labels,
         coverage_rate=evaluation.coverage_rate,
         overall_score=evaluation.overall_score,
         expression_analysis={
@@ -658,6 +800,79 @@ def get_session_status(session_id: str) -> SessionStatusResponse:
         status=session.status,
         created_at=session.created_at or datetime.utcnow(),
         message_count=len(messages),
+    )
+
+
+@router.get("/sessions", response_model=SessionListResponse)
+def list_sessions() -> SessionListResponse:
+    """获取所有会话列表。
+
+    返回所有非软删除的会话，按创建时间倒序排列，
+    用于前端会话切换和历史记录展示。
+
+    Returns:
+        会话列表响应
+    """
+    db: DatabaseService = get_db_service()
+    sessions = db.get_all_sessions()
+
+    items = []
+    for s in sessions:
+        msgs = db.get_messages(s.id)
+        items.append(
+            SessionListItem(
+                session_id=s.id,
+                status=s.status,
+                created_at=s.created_at or datetime.utcnow(),
+                message_count=len(msgs),
+            )
+        )
+
+    return SessionListResponse(sessions=items, total=len(items))
+
+
+@router.get("/sessions/{session_id}/messages", response_model=MessagesListResponse)
+def list_session_messages(session_id: str) -> MessagesListResponse:
+    """获取会话消息历史。
+
+    返回指定会话的所有消息记录，用于会话切换时恢复对话上下文。
+
+    Args:
+        session_id: 会话ID
+
+    Returns:
+        消息列表响应
+
+    Raises:
+        HTTPException: 会话不存在时抛出
+    """
+    db: DatabaseService = get_db_service()
+    session = db.get_session(session_id)
+
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
+        )
+
+    messages = db.get_messages(session_id)
+
+    msg_items = [
+        MessageResponse(
+            id=m.id,
+            session_id=m.session_id,
+            role=m.role,
+            content=m.content,
+            turn=m.turn,
+            created_at=m.created_at or datetime.utcnow(),
+        )
+        for m in messages
+    ]
+
+    return MessagesListResponse(
+        session_id=session_id,
+        messages=msg_items,
+        total=len(msg_items),
     )
 
 
