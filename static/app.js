@@ -433,6 +433,8 @@ async function createSession() {
     if (insightEl) insightEl.remove();
     const guidanceEl = document.getElementById('guidancePanel');
     if (guidanceEl) guidanceEl.remove();
+    const predEl = document.getElementById('suggestedRepliesPanel');
+    if (predEl) predEl.remove();
 
     showToast('会话创建成功！', 'success');
 
@@ -479,6 +481,8 @@ async function deleteSession() {
     if (insightEl) insightEl.remove();
     const guidanceEl = document.getElementById('guidancePanel');
     if (guidanceEl) guidanceEl.remove();
+    const predEl = document.getElementById('suggestedRepliesPanel');
+    if (predEl) predEl.remove();
 
     showToast('会话已永久删除', 'success');
     updateButtonStates();
@@ -565,6 +569,95 @@ function toggleGuidance() {
   }
 }
 
+const STRATEGY_STYLE = {
+  data_evidence: { color: '#1a4332', bg: 'rgba(26,67,50,0.07)', border: '#1a4332', icon: 'bar-chart-3' },
+  empathy_relation: { color: '#c4791a', bg: 'rgba(196,121,26,0.07)', border: '#c4791a', icon: 'heart' },
+  benefit_action: { color: '#7c3aed', bg: 'rgba(124,58,237,0.07)', border: '#7c3aed', icon: 'target' },
+};
+
+let _suggestionContainerBound = false;
+
+function updateSuggestedReplies(replies) {
+  let container = document.getElementById('suggestedRepliesPanel');
+  const isNew = !container;
+  if (isNew) {
+    container = document.createElement('div');
+    container.id = 'suggestedRepliesPanel';
+    container.className = 'suggested-replies-panel collapsed';
+    const anchor = document.getElementById('suggestedRepliesAnchor');
+    if (anchor) anchor.appendChild(container);
+  }
+
+  if (!_suggestionContainerBound) {
+    container.addEventListener('click', _handleSuggestClick);
+    _suggestionContainerBound = true;
+  }
+
+  const chipsHtml = replies.map((r) => {
+    const style = STRATEGY_STYLE[r.strategy] || STRATEGY_STYLE.data_evidence;
+    return `
+      <button class="suggest-chip"
+              data-strategy="${r.strategy}"
+              data-content="${_escapeAttr(r.content)}"
+              style="border-color:${style.border};background:${style.bg}"
+              title="点击发送此话术">
+        <span class="chip-label" style="color:${style.color};background:${style.bg}">
+          <i data-lucide="${style.icon}" style="width:11px;height:11px"></i>
+          ${escapeHtml(r.strategy_label)}
+        </span>
+        <span class="chip-text">${escapeHtml(r.content)}</span>
+      </button>`;
+  }).join('');
+
+  container.innerHTML = `
+    <div class="suggest-header" onclick="toggleSuggestPanel(event)">
+      <span class="suggest-title">
+        <i data-lucide="lightbulb" style="width:14px;height:14px"></i>
+        推荐话术
+      </span>
+      <span class="suggest-badge">${replies.length} 条可选</span>
+      <i data-lucide="chevron-down" class="suggest-toggle-icon"></i>
+    </div>
+    <div class="suggested-replies-wrap">${chipsHtml}</div>`;
+
+  container.style.display = 'block';
+  lucide.createIcons();
+}
+
+function toggleSuggestPanel(e) {
+  e.stopPropagation();
+  const panel = document.getElementById('suggestedRepliesPanel');
+  if (!panel) return;
+  
+  const isCollapsed = panel.classList.toggle('collapsed');
+  const icon = panel.querySelector('.suggest-toggle-icon');
+  if (icon) icon.setAttribute('data-lucide', isCollapsed ? 'chevron-down' : 'chevron-up');
+  lucide.createIcons();
+}
+
+function _handleSuggestClick(e) {
+  const chip = e.target.closest('.suggest-chip');
+  if (!chip) return;
+
+  const content = chip.dataset.content;
+  if (!content || !appState.currentSessionId || appState.isLoading) return;
+
+  elements.chatInput.value = content;
+  autoResizeTextarea();
+  updateButtonStates();
+
+  handleSendMessage(new Event('submit', { cancelable: true }));
+}
+
+function _escapeAttr(str) {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 async function sendMessageToAI(message, isInitial = false) {
   if (!appState.currentSessionId) return;
   
@@ -625,6 +718,10 @@ async function sendMessageToAI(message, isInitial = false) {
       updateGuidancePanel(data.guidance);
     } else {
       updateGuidancePanel(null);
+    }
+
+    if (data.predicted_responses && data.predicted_responses.length > 0) {
+      updateSuggestedReplies(data.predicted_responses);
     }
     
     appState.messageCount++;
@@ -1022,6 +1119,8 @@ async function clearHistory() {
     if (insightEl) insightEl.remove();
     const guidanceEl = document.getElementById('guidancePanel');
     if (guidanceEl) guidanceEl.remove();
+    const predEl = document.getElementById('suggestedRepliesPanel');
+    if (predEl) predEl.remove();
 
     updateButtonStates();
     loadSessionList();

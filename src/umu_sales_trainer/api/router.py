@@ -91,6 +91,7 @@ class SendMessageResponse(BaseModel):
         ai_response: AI客户回复
         evaluation: 评估结果（含对话分析、语义覆盖、表达质量、改进建议）
         guidance: 智能引导建议（覆盖率不足时生成）
+        predicted_responses: 三策略预测回复选项（基于动态加权 RAG 召回）
     """
 
     session_id: str
@@ -98,6 +99,7 @@ class SendMessageResponse(BaseModel):
     ai_response: str
     evaluation: dict[str, Any]
     guidance: Optional[dict[str, Any]] = None
+    predicted_responses: Optional[list[dict[str, Any]]] = None
 
 
 class EvaluationResponse(BaseModel):
@@ -742,6 +744,7 @@ def send_message(
         ai_response=ai_response or "",
         evaluation=eval_dict,
         guidance=guidance_dict,
+        predicted_responses=result.get("predicted_responses") or None,
     )
 
 

@@ -34,6 +34,7 @@ from umu_sales_trainer.core.evaluator import (
     calculate_overall_score,
 )
 from umu_sales_trainer.core.guidance import GuidanceMentor, GuidanceResult
+from umu_sales_trainer.core.response_predictor import ResponsePredictor
 from umu_sales_trainer.models.conversation import Message
 from umu_sales_trainer.models.customer import CustomerProfile
 from umu_sales_trainer.models.evaluation import EvaluationResult
@@ -80,6 +81,7 @@ class WorkflowState(dict):
     conversation_analysis: Optional[ConversationAnalysis] = None
     guidance_result: Optional[GuidanceResult] = None
     ai_response: str = ""
+    predicted_responses: list[dict] = []
     error: str = ""
 
 
@@ -419,18 +421,19 @@ def _make_node_guidance(mentor: GuidanceMentor):
 
 
 def _node_simulate(state: WorkflowState) -> dict[str, Any]:
-    """客户模拟节点：生成 AI 客户回复。
+    """客户模拟节点：生成 AI 客户回复 + 三策略预测回复。
 
     基于客户画像、产品信息和完整评估结果，
-    使用 LLM 生成符合角色设定的客户回复。
+    使用 LLM 生成符合角色设定的客户回复，
+    同时通过 ResponsePredictor 生成 3 个不同策略的预测回复选项。
 
     Args:
         state: 工作流状态
 
     Returns:
-        包含 ai_response 的状态更新
+        包含 ai_response 和 predicted_responses 的状态更新
     """
-    logger.info("[simulate] Generating AI customer response")
+    logger.info("[simulate] Generating AI customer response + predictions")
 
     try:
         llm = create_llm("dashscope")
@@ -439,12 +442,43 @@ def _node_simulate(state: WorkflowState) -> dict[str, Any]:
         if not response_text or len(response_text) < 5:
             response_text = _generate_fallback_response(state)
 
-        return {"ai_response": response_text}
+        predictor = ResponsePredictor(llm_service=llm)
+        predictions = predictor.predict(
+            sales_message=state["sales_message"],
+            last_ai_response=response_text,
+            context={
+                "conversation_analysis": state.get("conversation_analysis"),
+                "customer_profile": state.get("customer_profile"),
+                "coverage_result": state.get("coverage_result"),
+            },
+        )
+        predicted_dicts = [
+            {
+                "strategy": p.strategy,
+                "strategy_label": p.strategy_label,
+                "content": p.content,
+                "confidence": p.confidence,
+                "source_hints": p.source_hints,
+            }
+            for p in predictions
+        ]
+
+        logger.info(
+            "[simulate] Generated %d predictions with avg confidence %.2f",
+            len(predicted_dicts),
+            sum(p["confidence"] for p in predicted_dicts) / max(len(predicted_dicts), 1),
+        )
+
+        return {
+            "ai_response": response_text,
+            "predicted_responses": predicted_dicts,
+        }
 
     except Exception as e:
         logger.error("[simulate] Failed to generate AI response: %s", e)
         return {
             "ai_response": _generate_fallback_response(state),
+            "predicted_responses": [],
             "error": f"AI generation failed: {e}",
         }
 
