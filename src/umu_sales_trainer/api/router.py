@@ -7,7 +7,7 @@
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from umu_sales_trainer.core.workflow import WorkflowState, create_workflow
@@ -120,7 +120,6 @@ class EvaluationResponse(BaseModel):
     overall_score: float
     expression_analysis: dict[str, int]
     suggestions: list[dict[str, Any]] = []
-    conversation_analysis: Optional[dict[str, Any]] = None
 
 
 class SessionStatusResponse(BaseModel):
@@ -485,7 +484,6 @@ def _format_evaluation(
     eval_result: EvaluationResult,
     coverage_labels: dict[str, str] | None = None,
     expression_result=None,
-    conversation_analysis=None,
 ) -> dict[str, Any]:
     """格式化评估结果为字典。
 
@@ -493,7 +491,6 @@ def _format_evaluation(
         eval_result: 评估结果对象
         coverage_labels: 语义点ID到中文描述的映射（可选）
         expression_result: ExpressionResult 对象（可选，用于提取 suggestions）
-        conversation_analysis: ConversationAnalysis 对象（可选）
 
     Returns:
         格式化的字典
@@ -522,15 +519,6 @@ def _format_evaluation(
             }
             for s in expression_result.suggestions
         ]
-
-    if conversation_analysis is not None:
-        result["conversation_analysis"] = {
-            "stage": conversation_analysis.stage,
-            "intent": conversation_analysis.intent,
-            "objections": conversation_analysis.objections,
-            "sentiment": conversation_analysis.sentiment,
-            "confidence": conversation_analysis.confidence,
-        }
 
     return result
 
@@ -706,11 +694,10 @@ def send_message(
     coverage_labels = {sp.point_id: sp.description for sp in semantic_points}
 
     expr_result = result.get("expression_result")
-    conv_analysis = result.get("conversation_analysis")
     guide_result = result.get("guidance_result")
 
     eval_dict = (
-        _format_evaluation(evaluation, coverage_labels, expr_result, conv_analysis)
+        _format_evaluation(evaluation, coverage_labels, expr_result)
         if evaluation
         else {
             "coverage_status": {},
@@ -788,18 +775,15 @@ def get_evaluation(session_id: str) -> EvaluationResponse:
     customer = _build_customer_profile(session.customer_profile)
     product = _build_product_info(session.product_info)
 
+    semantic_points = _build_semantic_points_from_product(product)
+
     workflow_state: WorkflowState = {
         "session_id": session_id,
         "sales_message": last_user_msg.content,
         "customer_profile": customer,
         "product_info": product,
-        "conversation_history": [],
-        "semantic_points": [],
-        "analysis_result": None,
-        "evaluation_result": None,
-        "guidance": None,
-        "ai_response": None,
-        "next_node": "",
+        "semantic_points": semantic_points,
+        "messages": [],
     }
 
     result = _get_workflow().invoke(workflow_state)
@@ -831,13 +815,19 @@ def get_evaluation(session_id: str) -> EvaluationResponse:
 
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_session(session_id: str) -> None:
-    """软删除会话。
+def delete_session(
+    session_id: str,
+    hard: bool = Query(False, description="是否执行硬删除（物理删除，不可恢复）"),
+) -> None:
+    """删除会话。
 
-    对指定会话执行软删除，将其标记为已删除状态。
+    支持软删除和硬删除两种模式：
+    - 软删除（默认）：标记为已删除状态，数据保留在数据库中
+    - 硬删除（hard=true）：物理删除会话及其所有关联数据
 
     Args:
         session_id: 会话ID
+        hard: 是否执行硬删除
 
     Raises:
         HTTPException: 会话不存在时抛出
@@ -851,7 +841,30 @@ def delete_session(session_id: str) -> None:
             detail=f"Session {session_id} not found",
         )
 
-    db.soft_delete_session(session_id)
+    if hard:
+        db.hard_delete_session(session_id)
+    else:
+        db.soft_delete_session(session_id)
+
+
+@router.delete("/sessions", status_code=status.HTTP_204_NO_CONTENT)
+def delete_all_sessions(
+    hard: bool = Query(True, description="是否执行硬删除（默认真删除）"),
+) -> None:
+    """清空所有会话。
+
+    物理删除全部会话、消息和覆盖记录。
+
+    Args:
+        hard: 是否执行硬删除（默认True）
+    """
+    db: DatabaseService = get_db_service()
+    if hard:
+        db.hard_delete_all_sessions()
+    else:
+        sessions = db.get_all_sessions()
+        for s in sessions:
+            db.soft_delete_session(s.id)
 
 
 @router.get("/sessions/{session_id}/status", response_model=SessionStatusResponse)

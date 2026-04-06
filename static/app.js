@@ -7,14 +7,6 @@
 
 const API_BASE = '/api/v1';
 
-const STAGE_LABELS = {
-  'opening': '开场破冰',
-  'needs_discovery': '需求探查',
-  'presentation': '产品呈现',
-  'objection_handling': '异议处理',
-  'closing': '缔结成交'
-};
-
 const DIMENSION_LABELS = {
   'clarity': '清晰度',
   'professionalism': '专业性',
@@ -84,24 +76,24 @@ function formatTime(date) {
 
 function addMessage(content, isUser) {
   const messageDiv = document.createElement('div');
-  messageDiv.className = `message ${isUser ? 'user' : 'ai'}`;
-  
+  messageDiv.className = `msg ${isUser ? 'msg--user' : 'msg--ai'}`;
+
   const avatarDiv = document.createElement('div');
-  avatarDiv.className = 'message-avatar';
+  avatarDiv.className = 'msg-avatar';
   avatarDiv.textContent = isUser ? '我' : 'AI';
-  
+
   const contentDiv = document.createElement('div');
-  contentDiv.className = 'message-content';
+  contentDiv.className = 'msg-bubble';
   contentDiv.innerHTML = content.replace(/\n/g, '<br>');
-  
+
   const timeSpan = document.createElement('div');
   timeSpan.className = 'message-time';
   timeSpan.textContent = formatTime(new Date());
-  
+
   contentDiv.appendChild(timeSpan);
   messageDiv.appendChild(avatarDiv);
   messageDiv.appendChild(contentDiv);
-  
+
   elements.chatMessages.appendChild(messageDiv);
   scrollToBottom();
 }
@@ -142,41 +134,40 @@ function updateCoverageDisplay(coverageData) {
   if (!coverageData || coverageData.length === 0) return;
 
   appState.coverageData = coverageData;
-  
+
   const itemsContainer = elements.coverageItems;
   itemsContainer.innerHTML = '';
-  
+
   let coveredCount = 0;
-  
+
   coverageData.forEach((item, index) => {
-    const itemDiv = document.createElement('div');
-    
-    let statusClass = 'not-covered';
+    let statusClass = 'cov-item--off';
     if (item.status === 'covered') {
-      statusClass = 'covered';
+      statusClass = 'cov-item--on';
       coveredCount++;
     } else if (item.status === 'pending') {
-      statusClass = 'pending';
+      statusClass = 'cov-item--partial';
       coveredCount += 0.5;
     }
-    
-    itemDiv.className = `coverage-item ${statusClass}`;
+
+    const itemDiv = document.createElement('div');
+    itemDiv.className = `cov-item ${statusClass}`;
     itemDiv.style.animationDelay = `${index * 100}ms`;
-    
+
     itemDiv.innerHTML = `
-      <div class="item-info">
-        <h4>${escapeHtml(item.description)}</h4>
+      <span class="cov-dot"></span>
+      <div class="cov-info">
+        <strong>${escapeHtml(item.description)}</strong>
       </div>
-      <div class="item-status ${statusClass}"></div>
     `;
-    
+
     itemsContainer.appendChild(itemDiv);
   });
-  
+
   const percentage = Math.round((coveredCount / coverageData.length) * 100);
   elements.progressValue.textContent = `${percentage}%`;
   elements.progressFill.style.width = `${percentage}%`;
-  
+
   lucide.createIcons();
 }
 
@@ -191,8 +182,8 @@ function updateExpressionDisplay(expression, suggestions) {
   
   let exprContainer = document.getElementById('expressionAnalysis');
   if (!exprContainer) {
-    const coverageSection = document.querySelector('.coverage-section');
-    if (coverageSection) {
+    const coverageCard = document.querySelector('.coverage-card');
+    if (coverageCard) {
       exprContainer = document.createElement('div');
       exprContainer.id = 'expressionAnalysis';
       exprContainer.className = 'expression-analysis';
@@ -213,7 +204,7 @@ function updateExpressionDisplay(expression, suggestions) {
           </div>
         </div>
       `;
-      coverageSection.parentNode.insertBefore(exprContainer, coverageSection.nextSibling);
+      coverageCard.parentNode.insertBefore(exprContainer, coverageCard.nextSibling);
     }
   }
   
@@ -257,12 +248,12 @@ function updateExpressionDisplay(expression, suggestions) {
 function updateOverallScore(score) {
   let scoreEl = document.getElementById('overallScoreValue');
   if (!scoreEl) {
-    const coverageSection = document.querySelector('.coverage-section');
-    if (coverageSection) {
+    const coverageCard = document.querySelector('.coverage-card');
+    if (coverageCard) {
       const scoreDiv = document.createElement('div');
       scoreDiv.className = 'overall-score-display';
       scoreDiv.innerHTML = `<span>综合评分: </span><strong id="overallScoreValue">-</strong>`;
-      coverageSection.parentNode.insertBefore(scoreDiv, coverageSection.nextSibling);
+      coverageCard.parentNode.insertBefore(scoreDiv, coverageCard.nextSibling);
       scoreEl = document.getElementById('overallScoreValue');
     }
   }
@@ -274,80 +265,39 @@ function updateOverallScore(score) {
 
 function updateSidebarProfile(customer) {
   if (!customer) return;
-  
-  const profileSection = document.querySelector('.customer-profile');
+
+  const profileSection = document.querySelector('.customer-card');
   if (!profileSection) return;
-  
+
   const name = customer.name || '客户';
   const firstChar = name.charAt(0);
   const position = customer.position || '';
   const hospital = customer.hospital || '';
   const concerns = customer.concerns || [];
-  
-  const avatarEl = profileSection.querySelector('.profile-avatar');
+
+  const avatarEl = profileSection.querySelector('.avatar-text');
   if (avatarEl) avatarEl.textContent = firstChar;
-  
-  const nameEl = profileSection.querySelector('.profile-info h3');
+
+  const nameEl = profileSection.querySelector('.customer-name');
   if (nameEl) {
     const title = position ? `${name} · ${position}` : name;
     nameEl.textContent = title;
   }
-  
-  const posEl = profileSection.querySelector('.profile-info p');
-  if (posEl) posEl.textContent = hospital || '未知机构';
-  
-  const detailsEl = profileSection.querySelector('.profile-details');
+
+  const roleEl = profileSection.querySelector('.customer-role');
+  if (roleEl) roleEl.textContent = hospital || '未知机构';
+
+  const detailsEl = profileSection.querySelector('.concern-list');
   if (detailsEl && concerns.length > 0) {
     const iconMap = ['target', 'shield-check', 'file-text', 'heart-pulse', 'trending-up'];
     detailsEl.innerHTML = concerns.slice(0, 4).map((concern, i) => `
-      <div class="detail-item">
-        <i data-lucide="${iconMap[i % iconMap.length] || 'check'}" class="detail-icon"></i>
+      <li class="concern-item">
+        <i data-lucide="${iconMap[i % iconMap.length] || 'check'}" style="width:14px;height:14px"></i>
         <span>${escapeHtml(concern)}</span>
-      </div>
+      </li>
     `).join('');
     lucide.createIcons();
   }
-}
-
-function updateConversationInsight(analysis) {
-  if (!analysis || !analysis.stage) return;
-
-  let insightEl = document.getElementById('conversationInsight');
-  if (!insightEl) {
-    const profileSection = document.querySelector('.customer-profile');
-    const coverageSection = document.querySelector('.coverage-section');
-
-    if (profileSection && coverageSection) {
-      insightEl = document.createElement('div');
-      insightEl.id = 'conversationInsight';
-      insightEl.className = 'conversation-insight';
-      profileSection.parentNode.insertBefore(insightEl, coverageSection);
-    }
-  }
-
-  if (!insightEl) return;
-
-  const stageLabel = STAGE_LABELS[analysis.stage] || analysis.stage;
-  const stageClass = `stage-${analysis.stage}`;
-  const sentimentIcon = analysis.sentiment === 'positive' ? 'thumbs-up' : analysis.sentiment === 'cautious' ? 'alert-circle' : 'minus-circle';
-
-  let objectionsHtml = '';
-  if (analysis.objections && analysis.objections.length > 0) {
-    objectionsHtml = '<div class="objection-tags">' +
-      analysis.objections.map(obj => `<span class="objection-tag">${escapeHtml(obj)}</span>`).join('') +
-      '</div>';
-  }
-
-  insightEl.innerHTML = `
-    <div class="insight-header">
-      <span class="stage-badge ${stageClass}">${stageLabel}</span>
-      <i data-lucide="${sentimentIcon}" class="sentiment-icon"></i>
-    </div>
-    ${analysis.intent ? `<p class="intent-text">${escapeHtml(analysis.intent)}</p>` : ''}
-    ${objectionsHtml}
-  `;
-  insightEl.style.display = 'block';
-  lucide.createIcons();
 }
 
 async function createSession() {
@@ -445,38 +395,39 @@ async function createSession() {
 
 async function deleteSession() {
   if (!appState.currentSessionId) return;
-  
+
   try {
     setLoading(true);
-    
-    const response = await fetch(`${API_BASE}/sessions/${appState.currentSessionId}`, {
+
+    const response = await fetch(`${API_BASE}/sessions/${appState.currentSessionId}?hard=true`, {
       method: 'DELETE'
     });
-    
+
     if (!response.ok && response.status !== 404) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-    
-    const session = appState.sessions.find(s => s.id === appState.currentSessionId);
-    if (session) {
-      session.status = 'completed';
-      session.endTime = new Date();
-    }
-    
+
+    appState.sessions = appState.sessions.filter(s => s.id !== appState.currentSessionId);
     appState.currentSessionId = null;
     appState.messageCount = 0;
-    
+
     updateTopBarSession();
+    updateDrawerBadge();
     resetChatToInitialState();
     resetCoverageDisplay();
-    
-    showToast('会话已结束', 'success');
-    
+
+    const exprEl = document.getElementById('expressionAnalysis');
+    if (exprEl) exprEl.remove();
+    const scoreEl = document.querySelector('.overall-score-display');
+    if (scoreEl) scoreEl.remove();
+
+    showToast('会话已永久删除', 'success');
     updateButtonStates();
-    
+    loadSessionList();
+
   } catch (error) {
     console.error('Error deleting session:', error);
-    showToast('结束会话失败', 'error');
+    showToast('删除会话失败，请重试', 'error');
   } finally {
     setLoading(false);
   }
@@ -494,7 +445,12 @@ function updateGuidancePanel(guidance) {
     panel = document.createElement('div');
     panel.id = 'guidancePanel';
     panel.className = 'guidance-panel';
-    elements.chatMessages.parentNode.insertBefore(panel, elements.chatMessages);
+    const anchor = document.getElementById('guidancePanelAnchor');
+    if (anchor) {
+      anchor.appendChild(panel);
+    } else {
+      elements.chatMessages.parentNode.insertBefore(panel, elements.chatMessages);
+    }
   }
 
   const urgencyIcons = { high: 'alert-triangle', medium: 'alert-circle', low: 'info' };
@@ -581,10 +537,6 @@ async function sendMessageToAI(message, isInitial = false) {
 
       if (data.evaluation.overall_score !== undefined) {
         updateOverallScore(data.evaluation.overall_score);
-      }
-
-      if (data.evaluation.conversation_analysis) {
-        updateConversationInsight(data.evaluation.conversation_analysis);
       }
     }
 
@@ -763,12 +715,12 @@ function clearChatMessages() {
 function resetChatToInitialState() {
   if (elements.chatMessages) {
     elements.chatMessages.innerHTML = `
-      <div class="message ai">
-        <div class="message-avatar">AI</div>
-        <div class="message-content">
-          您好！我是您的AI销售训练助手。今天我们将模拟一场与张主任（内分泌科主任）关于<strong>糖宁胶囊</strong>的销售对话。<br><br>
+      <div class="msg msg--ai">
+        <div class="msg-avatar">AI</div>
+        <div class="msg-bubble">
+          您好！我是您的 AI 销售训练助手。今天我们将模拟一场与张主任（内分泌科主任）关于<strong>糖宁胶囊</strong>的销售对话。<br><br>
           张主任关注：HbA1c改善效果、药物安全性、患者依从性，注重循证医学证据。<br><br>
-          请开始您的销售开场...
+          请开始您的销售开场…
         </div>
       </div>
     `;
@@ -838,7 +790,7 @@ function loadSessionList() {
   if (!elements.sessionListContainer) return;
   
   if (appState.sessions.length === 0) {
-    elements.sessionListContainer.innerHTML = '<p class="empty-list">暂无历史会话</p>';
+    elements.sessionListContainer.innerHTML = '<p class="drawer-empty">暂无历史会话</p>';
     return;
   }
   
@@ -956,21 +908,45 @@ async function switchSession(sessionId) {
   }
 }
 
-function clearHistory() {
-  if (!confirm('确定要清空所有历史会话吗？')) return;
-  
-  appState.sessions = [];
-  appState.currentSessionId = null;
-  appState.currentSessionNumber = 0;
-  appState.messageCount = 0;
-  
-  updateTopBarSession();
-  updateDrawerBadge();
-  resetChatToInitialState();
-  resetCoverageDisplay();
-  updateButtonStates();
-  loadSessionList();
-  
-  showToast('历史已清空', 'success');
-  closeDrawer();
+async function clearHistory() {
+  if (!confirm('确定要永久删除所有历史会话吗？此操作不可恢复！')) return;
+
+  try {
+    setLoading(true);
+
+    const response = await fetch(`${API_BASE}/sessions?hard=true`, {
+      method: 'DELETE'
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    appState.sessions = [];
+    appState.currentSessionId = null;
+    appState.currentSessionNumber = 0;
+    appState.messageCount = 0;
+
+    updateTopBarSession();
+    updateDrawerBadge();
+    resetChatToInitialState();
+    resetCoverageDisplay();
+
+    const exprEl = document.getElementById('expressionAnalysis');
+    if (exprEl) exprEl.remove();
+    const scoreEl = document.querySelector('.overall-score-display');
+    if (scoreEl) scoreEl.remove();
+
+    updateButtonStates();
+    loadSessionList();
+
+    showToast('全部历史已永久删除', 'success');
+    closeDrawer();
+
+  } catch (error) {
+    console.error('Error clearing history:', error);
+    showToast('清空历史失败，请重试', 'error');
+  } finally {
+    setLoading(false);
+  }
 }

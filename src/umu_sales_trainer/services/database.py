@@ -274,10 +274,14 @@ class DatabaseService:
             会话模型实例，未找到或已软删除返回None
         """
         with self.create_session() as session:
-            result = session.query(SessionModel).filter(
-                SessionModel.id == session_id,
-                SessionModel.is_deleted == 0,
-            ).first()
+            result = (
+                session.query(SessionModel)
+                .filter(
+                    SessionModel.id == session_id,
+                    SessionModel.is_deleted == 0,
+                )
+                .first()
+            )
             if result:
                 return SessionModel(
                     id=result.id,
@@ -405,19 +409,60 @@ class DatabaseService:
         with self.create_session() as session:
             session.query(SessionModel).filter(
                 SessionModel.id == session_id,
-            ).update({
-                "is_deleted": 1,
-                "deleted_at": deleted_at,
-                "deleted_by": deleted_by,
-            })
+            ).update(
+                {
+                    "is_deleted": 1,
+                    "deleted_at": deleted_at,
+                    "deleted_by": deleted_by,
+                }
+            )
             session.query(MessageModel).filter(
                 MessageModel.session_id == session_id,
-            ).update({
-                "is_deleted": 1,
-                "deleted_at": deleted_at,
-                "deleted_by": deleted_by,
-            })
+            ).update(
+                {
+                    "is_deleted": 1,
+                    "deleted_at": deleted_at,
+                    "deleted_by": deleted_by,
+                }
+            )
         return True
+
+    def hard_delete_session(self, session_id: str) -> bool:
+        """硬删除会话及其所有关联数据（消息、覆盖记录）。
+
+        从数据库中物理删除指定会话的所有关联记录，不可恢复。
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            是否成功删除
+        """
+        with self.create_session() as session:
+            session.query(CoverageRecordModel).filter(
+                CoverageRecordModel.session_id == session_id,
+            ).delete(synchronize_session=False)
+            session.query(MessageModel).filter(
+                MessageModel.session_id == session_id,
+            ).delete(synchronize_session=False)
+            session.query(SessionModel).filter(
+                SessionModel.id == session_id,
+            ).delete()
+        return True
+
+    def hard_delete_all_sessions(self) -> int:
+        """硬删除所有会话及其关联数据。
+
+        清空全部会话、消息和覆盖记录，用于"清空历史"操作。
+
+        Returns:
+            删除的会话数量
+        """
+        with self.create_session() as session:
+            session.query(MessageModel).delete(synchronize_session=False)
+            session.query(CoverageRecordModel).delete(synchronize_session=False)
+            sess_count = session.query(SessionModel).delete()
+        return sess_count
 
     def save_coverage_record(
         self,

@@ -9,10 +9,9 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from langchain_core.messages import HumanMessage
 
@@ -92,9 +91,9 @@ class GuidanceMentor:
         self,
         coverage_result: CoverageResult,
         expression_result: ExpressionResult,
-        conversation_analysis: ConversationAnalysis | None,
         semantic_points: list[SemanticPoint],
-        customer_profile: CustomerProfile | None,
+        conversation_analysis=None,
+        customer_profile: CustomerProfile | None = None,
     ) -> GuidanceResult:
         """综合评估结果生成结构化引导。
 
@@ -204,23 +203,27 @@ class GuidanceMentor:
             else:
                 continue
 
-            items.append(GuidanceItem(
-                gap=f"{config['name']}偏低（{score}/10分）",
-                urgency=urgency,
-                suggestion=config["advice"],
-                talking_point=config["example"],
-                expected_effect=f"提升{config['name']}至7分以上",
-            ))
+            items.append(
+                GuidanceItem(
+                    gap=f"{config['name']}偏低（{score}/10分）",
+                    urgency=urgency,
+                    suggestion=config["advice"],
+                    talking_point=config["example"],
+                    expected_effect=f"提升{config['name']}至7分以上",
+                )
+            )
 
         if conversation_analysis and conversation_analysis.objections:
             for obj in conversation_analysis.objections[:2]:
-                items.append(GuidanceItem(
-                    gap=f"检测到异议信号：{obj}",
-                    urgency="medium",
-                    suggestion=f"准备{obj}相关的应对策略和证据材料",
-                    talking_point="我理解您的顾虑，这一点确实很重要。让我从XX角度为您详细说明...",
-                    expected_effect="提前化解潜在异议，推进对话进程",
-                ))
+                items.append(
+                    GuidanceItem(
+                        gap=f"检测到异议信号：{obj}",
+                        urgency="medium",
+                        suggestion=f"准备{obj}相关的应对策略和证据材料",
+                        talking_point="我理解您的顾虑，这一点确实很重要。让我从XX角度为您详细说明...",
+                        expected_effect="提前化解潜在异议，推进对话进程",
+                    )
+                )
 
         return items
 
@@ -243,10 +246,7 @@ class GuidanceMentor:
         Returns:
             参考话术文本
         """
-        return (
-            f"关于{point_description}，我想特别强调的是："
-            f"我们的产品在这方面具有显著优势..."
-        )
+        return f"关于{point_description}，我想特别强调的是：我们的产品在这方面具有显著优势..."
 
     @staticmethod
     def _generate_summary(items: list[GuidanceItem], coverage_result: CoverageResult) -> str:
@@ -271,9 +271,9 @@ class GuidanceMentor:
         self,
         coverage_result: CoverageResult,
         expression_result: ExpressionResult,
-        conversation_analysis: ConversationAnalysis | None,
         semantic_points: list[SemanticPoint],
-        customer_profile: CustomerProfile | None,
+        conversation_analysis=None,
+        customer_profile: CustomerProfile | None = None,
     ) -> GuidanceResult:
         """通过 LLM 生成更个性化的引导内容。
 
@@ -291,8 +291,11 @@ class GuidanceMentor:
             GuidanceResult LLM 增强后的引导结果
         """
         base_result = self.generate_guidance(
-            coverage_result, expression_result,
-            conversation_analysis, semantic_points, customer_profile,
+            coverage_result,
+            expression_result,
+            conversation_analysis,
+            semantic_points,
+            customer_profile,
         )
 
         if not base_result.is_actionable or not base_result.priority_list:

@@ -8,170 +8,173 @@
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
 </head>
 <body>
-    <div class="app-container">
-        <!-- Top Status Bar -->
-        <header class="top-status-bar">
-            <div class="topbar-session-info" id="topbarSessionInfo">
-                <span class="no-session">暂无活动会话</span>
+    <div class="app-shell">
+        <!-- ===== Header ===== -->
+        <header class="app-header">
+            <div class="header-left">
+                <div class="brand-mark">
+                    <span class="brand-icon">S</span>
+                    <span class="brand-name">SalesTrainer</span>
+                </div>
             </div>
 
-            <div class="topbar-actions">
-                <button class="btn btn-sm btn-primary" id="btnNewChat">
-                    <i data-lucide="plus"></i>
-                    <span>新建</span>
+            <div class="header-center" id="topbarSessionInfo">
+                <span class="no-session-label">新建会话开始训练</span>
+            </div>
+
+            <div class="header-right">
+                <button class="hdr-btn hdr-btn--primary" id="btnNewChat">
+                    <i data-lucide="plus" style="width:15px;height:15px"></i>
+                    <span>新会话</span>
                 </button>
-                <button class="btn btn-sm btn-secondary" id="btnDeleteSession" disabled>
-                    <i data-lucide="x"></i>
+                <button class="hdr-btn hdr-btn--ghost" id="btnDeleteSession" disabled>
+                    <i data-lucide="log-out" style="width:15px;height:15px"></i>
                     <span>结束</span>
                 </button>
-
-                <div class="drawer-trigger" id="drawerTrigger">
-                    <i data-lucide="messages-square"></i>
-                    <span class="drawer-badge" id="drawerBadge">0</span>
-                    <span class="drawer-hint">会话历史</span>
-                </div>
+                <button class="hdr-btn hdr-btn--drawer" id="drawerTrigger">
+                    <i data-lucide="clock-3" style="width:16px;height:16px"></i>
+                    <span class="hdr-badge" id="drawerBadge">0</span>
+                </button>
             </div>
         </header>
 
-        <!-- Sidebar -->
-        <aside class="sidebar">
-            <div class="sidebar-brand">
-                <div class="brand-logo">AI</div>
-                <div class="brand-title">
-                    <h1>销售训练</h1>
-                    <p>智能对话系统</p>
-                </div>
-            </div>
-
-            <div class="customer-profile">
-                <div class="profile-header">
-                    <div class="profile-avatar">张</div>
-                    <div class="profile-info">
-                        <h3>张主任</h3>
-                        <p>内分泌科主任</p>
-                    </div>
-                </div>
-                <div class="profile-details">
-                    <div class="detail-item">
-                        <i data-lucide="target" class="detail-icon"></i>
-                        <span>糖尿病控制率</span>
-                    </div>
-                    <div class="detail-item">
-                        <i data-lucide="shield-check" class="detail-icon"></i>
-                        <span>药物安全性</span>
-                    </div>
-                    <div class="detail-item">
-                        <i data-lucide="file-text" class="detail-icon"></i>
-                        <span>注重循证医学证据</span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="coverage-section">
-                <div class="section-title">
-                    <i data-lucide="check-circle-2"></i>
-                    <span>语义点覆盖</span>
-                </div>
-                <div class="coverage-items" id="coverageItems">
-                    <div class="coverage-item not-covered">
-                        <div class="item-info">
-                            <h4>HbA1c 改善</h4>
-                            <p>提及降低糖化血红蛋白效果</p>
+        <!-- ===== Body ===== -->
+        <div class="app-body">
+            <!-- Sidebar Panel -->
+            <aside class="sidebar-panel" id="sidebarPanel">
+                <div class="sidebar-scroll">
+                    <!-- Customer Card -->
+                    <section class="card customer-card">
+                        <div class="customer-card__header">
+                            <div class="avatar-ring">
+                                <span class="avatar-text">张</span>
+                                <span class="avatar-dot"></span>
+                            </div>
+                            <div class="customer-meta">
+                                <h3 class="customer-name">张主任</h3>
+                                <p class="customer-role">内分泌科主任 · 市第一人民医院</p>
+                            </div>
                         </div>
-                        <div class="item-status not-covered"></div>
-                    </div>
-                    <div class="coverage-item not-covered">
-                        <div class="item-info">
-                            <h4>低血糖风险</h4>
-                            <p>提及低血糖风险低</p>
+                        <ul class="concern-list">
+                            <li class="concern-item">
+                                <i data-lucide="target" style="width:14px;height:14px"></i>
+                                <span>糖尿病控制率</span>
+                            </li>
+                            <li class="concern-item">
+                                <i data-lucide="shield-check" style="width:14px;height:14px"></i>
+                                <span>药物安全性</span>
+                            </li>
+                            <li class="concern-item">
+                                <i data-lucide="file-text" style="width:14px;height:14px"></i>
+                                <span>循证医学证据</span>
+                            </li>
+                        </ul>
+                    </section>
+
+                    <!-- Coverage Card -->
+                    <section class="card coverage-card">
+                        <div class="coverage-card__head">
+                            <span class="coverage-card__icon">
+                                <i data-lucide="pie-chart" style="width:16px;height:16px"></i>
+                            </span>
+                            <h3 class="coverage-card__title">语义覆盖</h3>
+                            <span class="coverage-card__rate" id="progressValue">0%</span>
                         </div>
-                        <div class="item-status not-covered"></div>
-                    </div>
-                    <div class="coverage-item not-covered">
-                        <div class="item-info">
-                            <h4>用药便利性</h4>
-                            <p>提及一周一次给药</p>
+                        <div class="coverage-list" id="coverageItems">
+                            <div class="cov-item cov-item--off">
+                                <span class="cov-dot"></span>
+                                <div class="cov-info">
+                                    <strong>HbA1c 改善</strong>
+                                    <small>提及降低糖化血红蛋白效果</small>
+                                </div>
+                            </div>
+                            <div class="cov-item cov-item--off">
+                                <span class="cov-dot"></span>
+                                <div class="cov-info">
+                                    <strong>低血糖风险</strong>
+                                    <small>提及低血糖风险低</small>
+                                </div>
+                            </div>
+                            <div class="cov-item cov-item--off">
+                                <span class="cov-dot"></span>
+                                <div class="cov-info">
+                                    <strong>用药便利性</strong>
+                                    <small>提及一周一次给药</small>
+                                </div>
+                            </div>
                         </div>
-                        <div class="item-status not-covered"></div>
+                        <div class="coverage-track">
+                            <div class="coverage-track__fill" id="progressFill"></div>
+                        </div>
+                    </section>
+                </div>
+            </aside>
+
+            <!-- Main Chat Area -->
+            <main class="chat-area">
+                <!-- Guidance Panel (dynamic) -->
+                <div id="guidancePanelAnchor"></div>
+
+                <!-- Messages -->
+                <div class="chat-messages" id="chatMessages">
+                    <div class="msg msg--ai">
+                        <div class="msg-avatar">AI</div>
+                        <div class="msg-bubble">
+                            您好！我是您的 AI 销售训练助手。今天我们将模拟一场与张主任的销售对话。<br><br>
+                            张主任是内分泌科主任，关注糖尿病控制率和药物安全性，注重循证医学证据。<br><br>
+                            请开始您的销售开场…
+                        </div>
                     </div>
                 </div>
-                
-                <div class="progress-container">
-                    <div class="progress-header">
-                        <span class="progress-label">总体覆盖</span>
-                        <span class="progress-value" id="progressValue">0%</span>
-                    </div>
-                    <div class="progress-bar">
-                        <div class="progress-fill" id="progressFill" style="width: 0%"></div>
-                    </div>
+
+                <!-- Input -->
+                <div class="chat-input-bar">
+                    <form class="input-row" id="inputForm">
+                        <div class="input-field">
+                            <textarea
+                                class="chat-input"
+                                id="chatInput"
+                                placeholder="输入您的销售话术…"
+                                rows="1"
+                            ></textarea>
+                        </div>
+                        <button type="submit" class="send-btn" id="btnSend" disabled>
+                            <i data-lucide="arrow-up" style="width:20px;height:20px"></i>
+                        </button>
+                    </form>
                 </div>
-            </div>
-        </aside>
+            </main>
+        </div>
 
-        <!-- Main content -->
-        <main class="main-content">
-            <div class="chat-messages" id="chatMessages">
-                <div class="message ai">
-                    <div class="message-avatar">AI</div>
-                    <div class="message-content">
-                        您好！我是您的AI销售训练助手。今天我们将模拟一场与张主任的销售对话。<br><br>
-                        张主任是内分泌科主任，关注糖尿病控制率和药物安全性，注重循证医学证据。<br><br>
-                        请开始您的销售开场...
-                    </div>
-                </div>
-            </div>
-
-            <div class="chat-input-area">
-                <form class="input-form" id="inputForm">
-                    <div class="input-wrapper">
-                        <textarea
-                            class="chat-input"
-                            id="chatInput"
-                            placeholder="输入您的销售话术..."
-                            rows="1"
-                        ></textarea>
-                    </div>
-                    <button type="submit" class="send-button" id="btnSend" disabled>
-                        <i data-lucide="send"></i>
-                    </button>
-                </form>
-            </div>
-        </main>
-
-        <!-- Session Drawer (Right Side) -->
+        <!-- Session Drawer -->
         <aside class="session-drawer" id="sessionDrawer">
-            <div class="drawer-header">
-                <h3>历史会话</h3>
-                <button class="drawer-close" onclick="closeDrawer()">
-                    <i data-lucide="x"></i>
+            <div class="drawer-head">
+                <h3><i data-lucide="history" style="width:16px;height:16px;margin-right:6px"></i>历史会话</h3>
+                <button class="drawer-shut" onclick="closeDrawer()">
+                    <i data-lucide="x" style="width:16px;height:16px"></i>
                 </button>
             </div>
-
-            <div class="drawer-content" id="sessionListContainer">
-                <p class="empty-list">暂无历史会话</p>
+            <div class="drawer-body" id="sessionListContainer">
+                <p class="drawer-empty">暂无历史会话</p>
             </div>
-
-            <div class="drawer-footer">
-                <button class="btn btn-block btn-secondary" onclick="clearHistory()">
-                    <i data-lucide="trash-2"></i>
-                    <span>清空历史</span>
+            <div class="drawer-foot">
+                <button class="btn-danger-full" onclick="clearHistory()">
+                    <i data-lucide="trash-2" style="width:15px;height:15px"></i>
+                    清空全部历史（真删除）
                 </button>
             </div>
         </aside>
     </div>
 
-    <!-- Toast notifications -->
+    <!-- Toast -->
     <div class="toast" id="toast"></div>
 
-    <!-- Loading overlay -->
+    <!-- Loading -->
     <div class="loading-overlay" id="loadingOverlay">
-        <div class="loading-spinner"></div>
+        <div class="spinner"></div>
     </div>
 
-    <script>
-        // Initialize Lucide icons
-        lucide.createIcons();
-    </script>
+    <script>lucide.createIcons();</script>
     <script src="/static/app.js"></script>
 </body>
 </html>
