@@ -428,7 +428,12 @@ async function createSession() {
     if (exprEl) exprEl.remove();
     const scoreEl = document.querySelector('.overall-score-display');
     if (scoreEl) scoreEl.remove();
-    
+
+    const insightEl = document.getElementById('conversationInsight');
+    if (insightEl) insightEl.remove();
+    const guidanceEl = document.getElementById('guidancePanel');
+    if (guidanceEl) guidanceEl.remove();
+
     showToast('会话创建成功！', 'success');
 
     setLoading(false);
@@ -469,6 +474,11 @@ async function deleteSession() {
     if (exprEl) exprEl.remove();
     const scoreEl = document.querySelector('.overall-score-display');
     if (scoreEl) scoreEl.remove();
+
+    const insightEl = document.getElementById('conversationInsight');
+    if (insightEl) insightEl.remove();
+    const guidanceEl = document.getElementById('guidancePanel');
+    if (guidanceEl) guidanceEl.remove();
 
     showToast('会话已永久删除', 'success');
     updateButtonStates();
@@ -1007,6 +1017,11 @@ async function clearHistory() {
     if (exprEl) exprEl.remove();
     const scoreEl = document.querySelector('.overall-score-display');
     if (scoreEl) scoreEl.remove();
+
+    const insightEl = document.getElementById('conversationInsight');
+    if (insightEl) insightEl.remove();
+    const guidanceEl = document.getElementById('guidancePanel');
+    if (guidanceEl) guidanceEl.remove();
 
     updateButtonStates();
     loadSessionList();
