@@ -170,8 +170,8 @@ graph TD
 graph TD
     subgraph Frontend[前端层]
         UI[HTML/CSS/JavaScript 单页应用]
-        UI Panels[左侧 5 面板布局]
-        UI Chat[右侧对话区域]
+        "UI Panels[左侧 5 面板布局]"
+        "UI Chat[右侧对话区域]"
     end
 
     subgraph API[API 层 - FastAPI]
