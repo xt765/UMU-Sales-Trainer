@@ -256,17 +256,67 @@ body::before {
   font-weight: 500;
 }
 
+/* ===== Sidebar Brand (Logo + Title) ===== */
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border-light);
+  margin-bottom: 16px;
+  flex-shrink: 0;
+}
+
+.brand-logo {
+  width: 42px;
+  height: 42px;
+  background: var(--forest);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-serif);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--cream);
+  letter-spacing: -0.02em;
+  box-shadow: var(--shadow-sm);
+  flex-shrink: 0;
+}
+
+.brand-title h1 {
+  font-family: var(--font-serif);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--forest);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.brand-title p {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 2px 0 0 0;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
 .sidebar {
   width: 320px;
   background: var(--cream);
   border-right: 1px solid var(--border-light);
-  padding: 24px 20px;
+  padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 16px;
   overflow-y: auto;
   overflow-x: hidden;
-  position: relative;
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 150;
 }
 
 .sidebar::after {
@@ -639,6 +689,7 @@ body::before {
   position: relative;
   min-width: 0;
   overflow: hidden;
+  margin-left: 320px;
 }
 
 /* Content area layout */
