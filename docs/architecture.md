@@ -1,866 +1,633 @@
-# 系统架构深度解析
+# 技术架构设计文档
 
-本文档是 UMU Sales Trainer 系统的**技术架构深度解析**，面向需要深入理解系统设计的开发者和技术面试场景。
-
----
+本文档深入描述 AI Sales Trainer Chatbot 系统的技术架构细节，包括 Agentic RAG 工作流机制、Agent 协作模式、数据模型设计和关键实现决策。本文档面向需要理解系统内部运作机制的开发者。
 
 ## 目录
 
-- [一、架构设计哲学](#一架构设计哲学)
-- [二、LangGraph 工作流深度解析](#二langgraph-工作流深度解析)
-- [三层语义检测机制深度解析](#三三层语义检测机制深度解析)
-- [四、Agentic RAG 深度解析](#四agentic-rag-深度解析)
-- [五、数据库设计](#五数据库设计)
-- [六、异常处理与降级策略](#六异常处理与降级策略)
-- [七、性能优化策略](#七性能优化策略)
-- [八、安全机制](#八安全机制)
+- [1. Agentic RAG 在本系统中的工作方式](#1-agentic-rag-在本系统中的工作方式)
+- [2. Agent 详细设计与协作](#2-agent-详细设计与协作)
+- [3. 工作流引擎深度解析](#3-工作流引擎深度解析)
+- [4. 数据模型与状态管理](#4-数据模型与状态管理)
+- [5. 评分算法数学推导](#5-评分算法数学推导)
+- [6. 前端数据流与渲染](#6-前端数据流与渲染)
 
 ---
 
-## 一、架构设计哲学
+## 1. Agentic RAG 在本系统中的工作方式
 
-### 1.1 核心设计原则
+### 1.1 完整数据流
 
-本系统的架构设计遵循以下核心原则：
-
-```mermaid
-flowchart TB
-    subgraph Principles["六大设计原则"]
-        P1["🏗️ 分层架构<br/>Separation of Concerns"]
-        P2["🔒 单一职责<br/>Single Responsibility"]
-        P3["🔄 依赖倒置<br/>Dependency Inversion"]
-        P4["📦 高内聚低耦合<br/>Cohesion & Coupling"]
-        P5["⚡ 异步优先<br/>Async First"]
-        P6["🛡️ 防御性编程<br/>Defensive Programming"]
-    end
-    
-    subgraph Implementation["落地实践"]
-        I1["六层分层架构"]
-        I2["每个类只做一件事"]
-        I3["服务层抽象接口"]
-        I4["模块间通过接口通信"]
-        I5["FastAPI + asyncio"]
-        I6["输入校验 + 输出净化"]
-    end
-    
-    P1 --> I1
-    P2 --> I2
-    P3 --> I3
-    P4 --> I4
-    P5 --> I5
-    P6 --> I6
-```
-
-### 1.2 分层架构的依赖规则
-
-```
-┌─────────────────────────────────────────────────┐
-│              依赖方向：自上而下                    │
-│                                                 │
-│   表现层 → API 层 → 工作流层 → 业务逻辑层         │
-│                                              ↓   │
-│               服务层 → 数据层                     │
-│                                                 │
-│   ⚠️ 禁止：下层依赖上层（循环依赖）                │
-│   ✅ 允许：同层模块之间相互调用                      │
-└─────────────────────────────────────────────────┘
-```
-
-### 1.3 为什么不使用某些"流行"技术？
-
-| 技术 | 不使用原因 | 替代方案 |
-|------|------------|----------|
-| **Streamlit** | 过于重量级，仅为演示增加冗余 | 原生 HTML/CSS/JS |
-| **React/Vue** | 构建复杂度高，对 SPA 需求低 | Vanilla JS + Fetch API |
-| **Django** | ORM/Admin/Auth 等功能不需要 | FastAPI（轻量异步） |
-| **PostgreSQL** | 开发阶段无需额外数据库服务 | SQLite（可无缝迁移） |
-| **Redis** | 单实例无需分布式缓存 | 内存缓存（可选） |
-| **Milvus** | 规模 < 100万文档，杀鸡用牛刀 | ChromaDB |
-
----
-
-## 二、LangGraph 工作流深度解析
-
-### 2.1 设计模式选择决策树
-
-```mermaid
-flowchart TD
-    Start["需要实现对话工作流"] --> Q1{"对话流程是否固定?"}
-    
-    Q1 -->|"否，需要AI自主规划"| AgentMode["Agent 模式<br/>ReAct / Plan-and-Execute<br/>适用: 自主客服、研究助手"]
-    
-    Q1 -->|"是，流程确定"| Q2{"是否有条件分支?<br/>(如: 根据评估结果走不同路径)"}
-    
-    Q2 -->|"否，纯线性"| ChainMode["LCEL Chain<br/>Pipe / RunnableSequence<br/>适用: 简单文本处理流水线"]
-    
-    Q2 -->|"是，多路径路由"| Q3{"是否需要状态管理?<br/>(如: 记录轮次、覆盖状态)"}
-    
-    Q3 -->|"否"| BranchMode["RunnableBranch<br/>条件分支<br/>适用: 简单分类器"]
-    
-    Q3 -->|"是 ✅ 本案选择"| StateGraphMode["StateGraph ✅<br/>状态机 + 条件边<br/>适用: 对话系统、审批流、游戏AI"]
-    
-    style StateGraphMode fill:#4CAF50,color:#fff,stroke-width:3px
-```
-
-### 2.2 StateGraph vs 其他方案的代码对比
-
-#### 方案 A：传统 if-else（❌ 不推荐）
-
-```python
-async def process_message_old(message: str, state: dict) -> dict:
-    """传统 if-else 实现 —— 维护噩梦"""
-    analysis = await analyze(message)
-    evaluation = await evaluate(analysis, state['semantic_points'])
-    
-    pending = [p for p, s in evaluation.items() if s == 'not_covered']
-    
-    if len(pending) > 0:
-        guidance = await generate_guidance(pending)
-        response = await simulate_customer(state, guidance=guidance)
-    else:
-        response = await simulate_customer(state)
-    
-    state['turn'] += 1
-    state['messages'].append({'role': 'assistant', 'content': response})
-    
-    if state['turn'] >= 15 or (not pending and state['turn'] >= 3):
-        report = await generate_report(state)
-        state['is_active'] = False
-        return {**state, 'report': report}
-    
-    return state
-```
-
-**问题**：
-- 所有逻辑堆在一个函数里，无法单独测试
-- 新增节点需要修改整个函数
-- 无法可视化执行路径
-- 状态传递靠手动 dict 操作，容易出错
-
-#### 方案 B：LangGraph StateGraph（✅ 推荐）
-
-```python
-workflow = StateGraph(SalesTrainingState)
-
-workflow.add_node("validate_input", validate_input_node)
-workflow.add_node("analyze", analyze_node)
-workflow.add_node("evaluate", evaluate_node)
-workflow.add_node("decide", decide_node)
-workflow.add_node("guide", guide_node)
-workflow.add_node("simulate", simulate_node)
-workflow.add_node("finalize", finalize_node)
-
-workflow.set_entry_point("validate_input")
-workflow.add_edge("validate_input", "analyze")
-workflow.add_edge("analyze", "evaluate")
-workflow.add_edge("evaluate", "decide")
-
-workflow.add_conditional_edges(
-    "decide",
-    should_guide_or_respond,
-    {"guide": "guide", "simulate": "simulate"}
-)
-
-workflow.add_edge("guide", "simulate")
-
-workflow.add_conditional_edges(
-    "simulate",
-    should_continue_or_end,
-    {"continue": "analyze", "end": "finalize"}
-)
-
-app = workflow.compile()
-```
-
-**优势**：
-- 每个节点独立函数，可单独测试和复用
-- 条件边路由清晰声明式定义
-- `app.get_graph().print_ascii()` 可视化
-- 状态自动管理，类型安全
-
-### 2.3 状态流转的完整生命周期
-
-```mermaid
-stateDiagram-v2
-    [*] --> Created: 创建会话
-    
-    Created --> Active: 发送第一条消息
-    
-    Active --> Analyzing: 收到用户消息
-    Analyzing --> Evaluating: 分析完成
-    Evaluating --> Guiding: 有未覆盖点
-    Evaluating --> Responding: 全部已覆盖
-    Guiding --> Responding: 引导生成完成
-    Responding --> Analyzing: 继续下一轮
-    Responding --> Finalizing: 达到终止条件
-    
-    Finalizing --> Completed: 报告生成完成
-    Completed --> [*]
-    
-    Active --> Aborted: 用户中断
-    Aborted --> [*]
-```
-
-### 2.4 节点间的数据流详解
-
-```mermaid
-flowchart LR
-    subgraph Input["输入: state"]
-        SI1[session_id]
-        SI2[messages]
-        SI3[turn: 0]
-        SI4[semantic_points_status: {}]
-    end
-    
-    subgraph N_validate["validate_input"]
-        NV1{消息非空?}
-        NV1 -->|"Yes"| NV2[✓]
-        NV1 -->|"No"| NV_ERR[设置 error]
-    end
-    
-    subgraph N_analyze["analyze"]
-        NA1[LLM.analyze(message)]
-        NA2[→ analysis_result]
-    end
-    
-    subgraph N_evaluate["evaluate"]
-        NE1[Layer1: 关键词检测]
-        NE2[Layer2: Embedding相似度]
-        NE3[Layer3: LLM判断]
-        NE4[→ semantic_points_status]
-        NE5[→ pending_points]
-    end
-    
-    subgraph N_decide["decide"]
-        ND1{pending 非空?}
-        ND1 -->|"Yes"| NDG[→ route: guide]
-        ND1 -->|"No"| NDR[→ route: respond]
-    end
-    
-    subgraph Output["输出: updated state"]
-        SO1[turn: +1]
-        SO2[messages: +ai_response]
-        SO3[semantic_points_status: 更新]
-        SO4[pending_points: 更新]
-    end
-    
-    Input --> N_validate
-    N_validate --> N_analyze
-    N_analyze --> N_evaluate
-    N_evaluate --> N_decide
-    N_decide --> Output
-```
-
----
-
-## 三、三层语义检测机制深度解析
-
-### 3.1 算法复杂度分析
-
-| 层级 | 时间复杂度 | 空间复杂度 | API 调用 | 成本 |
-|------|-----------|-----------|----------|------|
-| **L1: 关键词** | O(K×M) | O(1) | 0 | ¥0 |
-| **L2: Embedding** | O(D²) | O(D) | 1 次 | ~¥0.001 |
-| **L3: LLM** | O(T²) | O(T) | 1 次 | ~¥0.01-0.05 |
-
-> 其中 K=关键词数量, M=消息长度, D=向量维度(1536), T=Token 数
-
-### 3.2 各层的误判模式分析
-
-```mermaid
-flowchart TD
-    subgraph FalsePositive["误报 (False Positive): 实际未覆盖，但判定为覆盖"]
-        FP1["L1: '这个药很安全' → 命中'安全'关键词 → 误判为SP-002"]
-        FP2["L2: '患者都说好' → 与多个语义点都有一定相似度 → 可能误判"]
-        FP3["L3: LLM 过于'宽容' → 对模糊表达判定为覆盖"]
-    end
-    
-    subgraph FalseNegative["漏报 (False Negative): 实际已覆盖，但判定为未覆盖"]
-        FN1["L1: '糖化血红蛋白下降了1.5%' → 未命中'HbA1c'精确词 → L1漏报"]
-        FN2["L2: 表达方式非常特殊 → 向量空间中距离较远 → L2漏报"]
-        FN3["L3: LLM 过于'严格' → 对隐含表达判定为未覆盖"]
-    end
-    
-    subgraph Solution["三层融合如何解决"]
-        S1["L1漏报 → L2可能捕获（语义相近）"]
-        S2["L2误判 → L3可以纠正（理解上下文）"]
-        S3["L3不确定 → L1/L2提供佐证信号"]
-        S4["最终加权融合 → 降低单一层级的误判影响"]
-    end
-```
-
-### 3.3 阈值选择的统计学依据
-
-#### L1 关键词阈值 = 50%
-
-```python
-# 统计分析：在 1000 条真实销售发言中
-# - 已覆盖发言的关键词命中率分布：均值 0.62, 标准差 0.18
-# - 未覆盖发言的关键词命中率分布：均值 0.12, 标准差 0.15
-# 
-# 选择 50% 作为阈值的原因：
-# - 在正态分布假设下，P(未覆盖 > 50%) ≈ 0.003 (假阳性率极低)
-# - P(已覆盖 > 50%) ≈ 0.75 (真阳性率较高)
-#
-# 这是一个偏保守的阈值，宁可漏报也不要误报
-KEYWORD_THRESHOLD = 0.50
-```
-
-#### L2 Embedding 阈值 = 0.75
-
-```python
-# DashScope text-embedding-v1 的余弦相似度特性：
-# - 同一语义的不同表达：通常 0.80-0.95
-# - 相关但不相同的语义：通常 0.55-0.75
-# - 完全无关的语义：通常 0.20-0.45
-#
-# 选择 0.75 的原因：
-# - 处于"相关"和"高度相关"的分界点
-# - 经验值，在实际数据上调整得到
-EMBEDDING_THRESHOLD = 0.75
-```
-
-#### L3 LLM 判定
-
-LLM 输出为二元结果（"是"/"否"），无需阈值。但可以通过 Prompt 微调控制其严格程度。
-
-### 3.4 完整检测流程的伪代码
-
-```python
-async def detect_coverage(
-    message: str,
-    point: SemanticPoint,
-    llm_service: LLMService,
-    embedding_service: EmbeddingService
-) -> tuple[float, str]:
-    """
-    三层语义检测完整流程。
-    
-    Returns:
-        (final_score, status): 最终得分和覆盖状态
-    """
-    # ===== 第一层：关键词检测 =====
-    keyword_score = _keyword_detection(message, point)
-    
-    # 快速路径：如果关键词得分很高，直接判定为覆盖
-    if keyword_score >= KEYWORD_THRESHOLD:
-        return (keyword_score, "covered")
-    
-    # ===== 第二层：Embedding 相似度 =====
-    msg_embedding = embedding_service.encode(message)
-    point_embedding = embedding_service.encode(point.description)
-    embedding_score = cosine_similarity(msg_embedding, point_embedding)
-    
-    # 快速路径：如果 Embedding 得分很高，直接判定
-    if embedding_score >= EMBEDDING_THRESHOLD:
-        final = fuse(keyword_score, embedding_score, 1.0)
-        return (final, "covered")
-    
-    # ===== 第三层：LLM 零样本分类 =====
-    prompt = build_judgment_prompt(message, point)
-    response = await llm_service.ainvoke(prompt)
-    llm_judgment = 1.0 if "是" in response else 0.0
-    
-    # ===== 融合最终结果 =====
-    final_score = fuse(keyword_score, embedding_score, llm_judgment)
-    status = "covered" if final_score >= FUSION_THRESHOLD else "not_covered"
-    
-    return (final_score, status)
-```
-
----
-
-## 四、Agentic RAG 深度解析
-
-### 4.1 检索增强生成的演进
-
-```mermaid
-timeline
-    title RAG 技术演进
-    2020 : Naive RAG : 检索-拼接-生成
-    2021 : Advanced RAG : 重排序+混合检索
-    2022 : Modular RAG : 模块化管道
-    2023 : Agentic RAG : Agent主动决策检索策略 ✅本案采用
-    2024+ : Self-RAG : LLM自我反思检索质量
-```
-
-### 4.2 本系统的 RAG 使用场景
-
-本系统的 RAG 主要服务于**两个场景**：
-
-```mermaid
-flowchart TB
-    subgraph Scene1["场景一：客户模拟回复生成"]
-        direction TB
-        S1A[输入: 客户画像 + 对话历史] --> S1B{需要专业知识?}
-        S1B -->|是| S1C[RAG 检索相关知识]
-        S1B -->|否| S1D[纯 LLM 生成]
-        S1C & S1D --> S1E[组装 System Prompt]
-        S1E --> S1F[生成客户回复]
-    end
-    
-    subgraph Scene2["场景二：引导话术生成"]
-        direction TB
-        S2A[输入: 未覆盖语义点列表] --> S2B[RAG 检索优秀话术示例]
-        S2B --> S2C[基于参考话术生成引导]
-        S2C --> S2D[输出引导话术]
-    end
-```
-
-### 4.3 RRF 数学推导与直觉解释
-
-#### 从排序概率角度理解 RRF
-
-RRF 的形式 $\frac{1}{k + \text{rank}}$ 可以从**几何分布**的角度理解：
-
-$$P(X = \text{rank}) = \frac{1}{k} \cdot \left(1 - \frac{1}{k}\right)^{\text{rank}-1}$$
-
-当 $k$ 较大时，$(1 - \frac{1}{k})^{\text{rank}-1} \approx e^{-\frac{\text{rank}-1}{k}} \approx 1$
-
-因此 $\text{RRF} \approx \frac{1}{k}$，即排名靠前的文档获得近似均匀的高分。
-
-#### k 值敏感性分析
-
-| k 值 | 第1名得分 | 第10名得分 | 第1名/第10名比值 | 特点 |
-|------|-----------|-----------|-----------------|------|
-| 10 | 0.0909 | 0.0500 | 1.82x | 区分度过高，Top-heavy |
-| **60** | **0.0164** | **0.0143** | **1.15x** | **平滑适中（推荐）** |
-| 100 | 0.0099 | 0.0091 | 1.09x | 过于平滑，区分度不足 |
-
-> **面试回答**：我们选择 k=60 是因为它是 Elasticsearch 的默认值，经过大量生产环境验证。
-
-### 4.4 动态加权的实现细节
-
-```python
-def calculate_dynamic_weights(
-    context: ConversationContext
-) -> dict[str, float]:
-    """
-    基于对话上下文动态计算 Collection 权重。
-    
-    权重设计的核心原则：
-    1. 权重之和始终为 1.0（归一化）
-    2. 场景相关的 Collection 获得更高权重
-    3. 权重差异不宜过大（避免信息丢失）
-    
-    Args:
-        context: 包含当前对话状态的上下文对象
-    
-    Returns:
-        各 Collection 的权重字典
-    """
-    base_weights = {
-        'objection_handling': 0.34,
-        'product_knowledge': 0.33,
-        'excellent_samples': 0.33
-    }
-    
-    # 场景识别与权重调整
-    if context.has_objection:
-        # 客户提出异议时，大幅提升异议处理库权重
-        base_weights['objection_handling'] = 0.55
-        base_weights['product_knowledge'] = 0.30
-        base_weights['excellent_samples'] = 0.15
-        
-    elif context.pending_points and len(context.pending_points) > 0:
-        # 有未覆盖卖点时，提升优秀话术库权重（用于生成引导）
-        base_weights['objection_handling'] = 0.25
-        base_weights['product_knowledge'] = 0.25
-        base_weights['excellent_samples'] = 0.50
-        
-    elif context.turn <= 2:
-        # 对话初期，重点补充产品知识
-        base_weights['objection_handling'] = 0.15
-        base_weights['product_knowledge'] = 0.60
-        base_weights['excellent_samples'] = 0.25
-        
-    elif context.customer_sentiment == 'negative':
-        # 客户态度消极时，侧重异议处理
-        base_weights['objection_handling'] = 0.50
-        base_weights['product_knowledge'] = 0.30
-        base_weights['excellent_samples'] = 0.20
-    
-    return base_weights
-```
-
----
-
-## 五、数据库设计
-
-### 5.1 SQLite ER 图
-
-```mermaid
-erDiagram
-    sessions {
-        varchar_id PK "会话ID (UUID)"
-        json customer_profile "客户画像 JSON"
-        json product_info "产品信息 JSON"
-        int turn "当前轮次"
-        boolean is_session_active "是否活跃"
-        float overall_score "综合评分"
-        string grade "等级 A-F"
-        datetime created_at "创建时间"
-        datetime updated_at "更新时间"
-        datetime deleted_at "删除时间"
-        int is_deleted "软删除标记 0/1"
-    }
-    
-    messages {
-        varchar_id PK "消息ID (UUID)"
-        varchar session_id FK "关联会话ID"
-        string role "角色: user/assistant/system/guidance"
-        text content "消息内容"
-        int turn "所属轮次"
-        json analysis_result "分析结果 JSON"
-        json coverage_snapshot "快照: 当时的覆盖状态"
-        datetime created_at "创建时间"
-        int is_deleted "软删除标记 0/1"
-    }
-    
-    coverage_records {
-        varchar_id PK "记录ID (UUID)"
-        varchar session_id FK "关联会话ID"
-        varchar point_id "语义点 ID (SP-001等)"
-        string status "状态: covered/not_covered/pending"
-        float confidence "置信度 0-1"
-        int first_mentioned_turn "首次被提及的轮次"
-        text evidence "证据原文摘录"
-        datetime detected_at "检测到的时间"
-    }
-    
-    sessions ||--o{ messages : "一个会话包含多条消息"
-    sessions ||--o{ coverage_records : "一个会话追踪多个语义点"
-```
-
-### 5.2 索引设计
-
-```sql
--- 会话表索引
-CREATE INDEX idx_sessions_created ON sessions(created_at);
-CREATE INDEX idx_sessions_active ON sessions(is_session_active, is_deleted);
-CREATE INDEX idx_sessions_deleted ON sessions(is_deleted);
-
--- 消息表索引
-CREATE INDEX idx_messages_session ON messages(session_id, turn);
-CREATE INDEX idx_messages_role ON messages(session_id, role);
-CREATE INDEX idx_messages_created ON messages(created_at);
-
--- 覆盖记录索引
-CREATE INDEX idx_coverage_session ON coverage_records(session_id, point_id);
-CREATE INDEX idx_coverage_status ON coverage_records(status);
-```
-
-### 5.3 ChromaDB Metadata Schema
-
-```python
-# 每个 Chroma 文档的 metadata 结构
-DOCUMENT_METADATA = {
-    "doc_id": str,           # 唯一文档 ID
-    "collection_type": str,  # objection_handling / product_knowledge / excellent_samples
-    "source": str,           # 来源文件名
-    "category": str,         # 分类标签（如异议类型、产品特性等）
-    "is_deleted": str,       # 软删除标记 "true" / "false"
-    "created_at": str,       # ISO 格式时间戳
-    "updated_at": str,       # ISO 格式时间戳
-}
-
-# where 过滤器示例
-where_filter = {
-    "$and": [
-        {"is_deleted": {"$eq": "false"}},
-        {"category": {"$in": ["price_objection", "safety_concern"]}}
-    ]
-}
-```
-
-### 5.4 数据一致性保障：补偿队列
+销售代表发送一条消息后，数据在系统中经历的完整处理链路如下：
 
 ```mermaid
 sequenceDiagram
-    participant API as API Service
-    participant SQL as SQLite
-    participant Queue as Pending Operations Queue
-    participant Worker as Background Worker
-    participant CHR as ChromaDB
-    participant Alert as Alerting System
-    
-    API->>SQL: BEGIN TRANSACTION
-    API->>SQL: UPDATE sessions SET is_deleted=1
-    API->>SQL: UPDATE messages SET is_deleted=1
-    API->>Queue: INSERT ('delete_chroma', session_id, doc_ids, retry_count=0)
-    API->>SQL: COMMIT
-    API-->>Client: 200 OK
-    
-    loop 定时扫描 (每 30 秒)
-        Queue->>Worker: GET next pending operation
-        Worker->>CHR: soft_delete(doc_ids)
-        
-        alt 成功
-            CHR-->>Worker: success
-            Worker->>Queue: MARK as completed
-        else 失败
-            CHR-->>Worker: error
-            Worker->>Queue: INCREMENT retry_count
-            
-            alt retry_count < 3
-                Note over Worker: 等待 2^retry 秒后重试
-            else retry_count >= 3
-                Worker->>Alert: SEND alert (Slack/Email)
-                Worker->>Queue: MARK as failed (需人工处理)
-            end
-        end
+    actor User as 销售代表
+    participant FE as 前端 (Browser)
+    participant Router as FastAPI Router
+    participant DB as SQLite
+    participant WF as LangGraph StateGraph
+
+    par 路由层处理
+        FE->>Router: POST /sessions/{id}/messages<br/>{content}
+        Router->>DB: save_message(role="user")
+        Router->>DB: get_messages() + get_session()
     end
+
+    Router->>WF: invoke(WorkflowState)
+
+    par 并行分析阶段（Fan-out）
+        WF->>CA: _node_conversation_analyze(state)
+        Note right of CA: LLM: 分析阶段/意图/异议
+        CA-->>WF: ConversationAnalysis
+
+        WF->>SE: _node_semantic_eval(state)
+        Note right of SE: 3-layer detection<br/>keyword(0.2) + embedding(0.3) + llm(0.5)
+        SE-->>WF: CoverageResult
+
+        WF->>EC: _node_expression_eval(state)
+        Note right of EC: LLM: 三维评分 + 建议
+        EC-->>WF: ExpressionResult
+    end
+
+    WF->>WF: _node_synthesize(state)<br/>calculate_overall_score(cov, expr, turn)
+
+    alt 需要引导（coverage < 80% or score < 70）
+        WF->>GM: _node_guidance(state)<br/>GuidanceMentor.generate_guidance()
+        GM-->>WF: GuidanceResult(is_actionable=True)
+    else 表现优秀（coverage >= 80% and score >= 70）
+        Note over WF: 跳过 guidance 节点
+    end
+
+    WF->>CS: _node_simulate(state)<br/>LLM 客户角色扮演
+    CS-->>WF: ai_response
+
+    WF-->>Router: 完整 WorkflowState
+
+    par 响应格式化
+        Router->>DB: save_message(role="assistant")
+        Router->>DB: save_coverage_record()
+        Router->>Router: _format_evaluation()
+        Router->>Router: _format_guidance()
+    end
+
+    Router-->>FE: SendMessageResponse<br/>{ai_response, evaluation, guidance}
+    FE->>FE: updateAllPanels(response)
 ```
 
----
+### 1.2 累积式语义评估策略
 
-## 六、异常处理与降级策略
+本系统的一个重要设计决策是：**语义覆盖评估使用累积式文本**，而非仅评估当前轮次消息。
 
-### 6.1 错误分类体系
-
-```mermaid
-flowchart TD
-    Error["运行时错误"] --> BizError["业务错误"]
-    Error --> SysError["系统错误"]
-    
-    BizError --> InputError["输入错误 (400)"]
-    BizError --> NotFoundError["资源不存在 (404)"]
-    BizError --> StateError["状态错误 (409)"]
-    
-    SysError --> LLMError["LLM 服务错误"]
-    SysError --> DBError["数据库错误"]
-    SysError --> VectorError["向量库错误"]
-    SysError --> NetworkError["网络错误"]
-    
-    LLMError --> Timeout["超时"]
-    LLMError --> RateLimit["限流"]
-    LLMError --> InvalidResponse["无效响应"]
-```
-
-### 6.2 LLM 调用降级策略
-
-```mermaid
-flowchart TD
-    Start[LLM 调用请求] --> TryPrimary[尝试主要模型<br/>qwen-max]
-    
-    TryPrimary --> |成功| Success[返回结果]
-    TryPrimary --> |超时| Retry1[重试第1次]
-    TryPrimary --> |限流| Backoff[指数退避等待<br/>2^n 秒]
-    TryPrimary --> |错误| TryFallback[切换备用模型<br/>qwen-turbo]
-    
-    Retry1 --> TryPrimary
-    Backoff --> TryPrimary
-    TryFallback --> |成功| Success
-    TryFallback --> |失败| Degrade[降级为规则引擎]
-    
-    Degrade --> RuleBased[基于模板的固定回复]
-    RuleBased --> Success
-    
-    style Success fill:#C8E6C9
-    style Degrade fill:#FFCDD2
-    style RuleBased fill:#FFF9C4
-```
-
-### 6.3 降级后的行为保证
-
-即使 LLM 完全不可用，系统仍能提供**基本功能**：
-
-| 功能 | 正常模式 | LLM 降级模式 |
-|------|----------|-------------|
-| **输入验证** | ✅ 正常 | ✅ 正常（本地逻辑） |
-| **关键词检测** | ✅ 正常 | ✅ 正常（无 LLM 依赖） |
-| **Embedding 检测** | ✅ 正常 | ⚠️ 跳过（API 依赖） |
-| **LLM 判定** | ✅ 正常 | ❌ 默认为"未覆盖" |
-| **引导生成** | ✅ LLM 动态生成 | 📝 使用预置模板 |
-| **客户模拟** | ✅ LLM 角色扮演 | 📝 使用预置回复池 |
-| **报告生成** | ✅ LLM 分析 | 📊 基于规则的简单评分 |
-
----
-
-## 七、性能优化策略
-
-### 7.1 性能瓶颈分析
-
-```mermaid
-gantt
-    title 单次请求耗时分解 (目标: P95 < 10s)
-    dateFormat X
-    axisFormat %S秒
-    
-    section 输入验证
-    validate      :0, 1
-    
-    section 发言分析
-    analyze_llm   :1, 3
-    
-    section 语义评估
-    keyword       :3, 3.01
-    embedding_api :3.01, 3.1
-    embedding_calc:3.1, 3.11
-    llm_classify  :3.11, 5
-    
-    section 引导生成
-    rag_retrieve  :5, 5.5
-    rag_rerank    :5.5, 5.7
-    guide_llm     :5.7, 7
-    
-    section 客户模拟
-    simulate_llm  :7, 9
-    
-    section 数据持久化
-    db_save       :9, 9.2
-```
-
-### 7.2 优化方案
-
-| 瓶颈 | 优化策略 | 预期效果 |
-|------|----------|----------|
-| **LLM 调用串行** | 并行化无关的 LLM 调用 | 减少 30-40% 延迟 |
-| **Embedding 批量** | 批量编码多个文本 | 减少网络往返 |
-| **Chroma 持久化连接** | 复用 HTTP 连接池 | 减少 TCP 握手开销 |
-| **SQLite WAL 模式** | 启用 Write-Ahead Logging | 读写并发性能提升 |
-| **响应流式输出** | SSE / Server-Sent Events | 首字节时间降低 |
-
-### 7.3 并行化优化示例
+在 `router.py` 的 `send_message()` 端点中：
 
 ```python
-import asyncio
+# 拼接全程用户消息用于累积式语义评估
+all_user_messages = [m.content for m in messages if m.role == "user"]
+all_user_messages.append(request.content)
+cumulative_sales_text = "\n".join(all_user_messages)
 
-async def optimized_evaluator(
-    message: str,
-    points: list[SemanticPoint]
-) -> dict:
-    """
-    优化版评估器：并行执行独立的检测任务。
-    
-    原始版本：串行执行每个语义点的三层检测
-    优化版本：同一层的所有检测并行执行
-    """
-    # 第一层：所有关键词检测并行（纯 CPU，极快）
-    keyword_results = await asyncio.gather(*[
-        run_in_executor(_keyword_detection, message, p)
-        for p in points
-    ])
-    
-    # 第二层：批量 Embedding（一次 API 调用）
-    embeddings = await embedding_service.batch_encode([message] + [p.description for p in points])
-    msg_emb = embeddings[0]
-    point_embs = embeddings[1:]
-    embedding_results = [
-        cosine_similarity(msg_emb, pe) for pe in point_embs
-    ]
-    
-    # 第三层：仅对前两层都不确定的点调用 LLM
-    uncertain_indices = [
-        i for i, (kw, emb) in enumerate(zip(keyword_results, embedding_results))
-        if kw < 0.5 and emb < 0.75
-    ]
-    
-    llm_results = [0.0] * len(points)
-    if uncertain_indices:
-        llm_results_batch = await asyncio.gather(*[
-            llm_judgment(message, points[i]) for i in uncertain_indices
-        ])
-        for idx, result in zip(uncertain_indices, llm_results_batch):
-            llm_results[idx] = result
-    
-    # 融合结果
-    return [
-        fuse(kw, emb, llm) for kw, emb, llm in zip(keyword_results, embedding_results, llm_results)
-    ]
+workflow_state: WorkflowState = {
+    ...
+    "sales_message": cumulative_sales_text,  # 累积式，非单条
+    ...
+}
 ```
+
+这意味着 `sales_message` 字段包含从第 1 轮到当前轮次的全部用户发言拼接结果。这样设计的理由是：
+
+| 评估方式 | 优点 | 缺点 |
+|---------|------|------|
+| **累积式（当前方案）** | 反映完整对话的覆盖情况，分数随对话推进自然增长 | 长对话时输入 token 增加，LLM 成本上升 |
+| 单轮式 | 输入短、成本低 | 无法反映整体覆盖进度，每轮覆盖率可能波动 |
 
 ---
 
-## 八、安全机制
+## 2. Agent 详细设计与协作
 
-### 8.1 输入校验链
+### 2.1 ConversationAnalyst -- 对话分析师
+
+**源文件位置**: [analyzer.py](src/umu_sales_trainer/core/analyzer.py)
+
+**类签名**: `ConversationAnalyst(llm_service: LLMService)`
+
+**核心方法调用链**:
+
+```
+analyze(sales_message, customer_profile, conversation_history)
+  |-- _build_prompt(...) -> str (构建含阶段定义和上下文的 Prompt)
+  |-- _llm.invoke([HumanMessage(prompt)]) -> response
+  |-- _parse_response(content) -> ConversationAnalysis (JSON 解析)
+  |-- _detect_objections_by_keywords(message) -> list[str] (规则补充)
+  |-- 合并 objections 取并集
+  |-- return ConversationAnalysis
+```
+
+**Prompt 设计要点**:
+
+- 包含完整的 5 阶段定义（STAGE_DEFINITIONS 常量）
+- 注入客户画像上下文（姓名/职位/关注点/性格）
+- 注入最近 4 条对话历史作为阶段演进参考
+- 要求严格 JSON 格式输出，包含 stage/intent/objections/sentiment 四个字段
+
+**降级策略 `_rule_based_analysis()`**:
+
+当 LLM 调用失败时，使用关键词匹配做基础判断：
+
+| 检测目标 | 关键词列表 | 匹配到则判定为 |
+|---------|-----------|--------------|
+| opening | 您好/你好/感谢/很高兴/介绍/我是 | 开场破冰 |
+| needs_discovery | 您觉得/您目前/请问/了解到/情况如何 | 需求探查 |
+| presentation | 我们的产品/这款/临床/疗效/数据显示/HbA1c | 产品呈现 |
+| objection_handling | 关于您的顾虑/您提到的/确实/理解您的担心 | 异议处理 |
+| closing | 那么/接下来/我们可以/建议/安排/跟进 | 缔结成交 |
+
+**9 类异议关键词库 (`OBJECTION_KEYWORDS`)**:
+
+```python
+OBJECTION_KEYWORDS = {
+    "价格":       ["贵", "太贵", "预算", "成本", "便宜", "降价", "折扣"],
+    "安全性":     ["副作用", "不良反应", "肝肾", "毒性", "风险", "安全吗", ...],
+    "证据":       ["证据", "研究", "试验", "文献", "论文", "数据来源", ...],
+    "竞品":       ["其他产品", "同类药", "竞品", "对比", "别的品牌", ...],
+    "时机":       ["再考虑", "不急", "等等", "下次再说", "暂时不需要"],
+    "用法便利性": ["一天几次", "用法复杂", "不方便", "麻烦", "依从性", ...],
+    "医保报销":   ["医保", "报销", "自费", "进医保", "报销比例", ...],
+    "处方限制":   ["处方", "限制", "适应症", "开药", "非处方"],
+    "疗效疑虑":   ["效果不明显", "没效果", "起效慢", "疗效差", ...],
+}
+```
+
+### 2.2 SemanticCoverageExpert -- 语义覆盖专家
+
+**源文件位置**: [evaluator.py](src/umu_sales_trainer/core/evaluator.py) （`SemanticCoverageExpert` 类）
+
+**类签名**: `SemanticCoverageExpert(embedding_service: EmbeddingService, llm_service: LLMService)`
+
+**核心方法调用链**:
+
+```
+evaluate_coverage(sales_message, semantic_points, context)
+  |-- for each semantic_point:
+  |     |-- _evaluate_single_point(message, point)
+  |           |-- _keyword_detection(message, point) -> float (0~1)
+  |           |-- _embedding_similarity(message, point) -> float (0~1)
+  |           |-- _llm_judgment(message, point) -> float (0 或 1)
+  |           |-- weighted_sum = k*0.2 + e*0.3 + l*0.5
+  |           |-- return "covered" if >= 0.5 else "not_covered"
+  |-- _calculate_coverage_rate(status_dict) -> float
+  |-- return CoverageResult(status, rate, uncovered_ids)
+```
+
+**3 层检测决策树**:
 
 ```mermaid
-flowchart LR
-    A[原始输入] --> B[长度检查<br/>≤2000字符]
-    B --> C[空值检查<br/>非空且非空白]
-    C --> D[格式检查<br/>合法 UTF-8]
-    D --> E[内容安全检查<br/>Prompt Injection 检测]
-    E --> F[✅ 通过校验]
-    
-    B -->|失败| ERR1[400 Bad Request]
-    C -->|失败| ERR1
-    D -->|失败| ERR1
-    E -->|失败| ERR2[400 Unsafe Content]
+graph TD
+    START[收到销售消息 + 语义点] --> L1{关键词匹配率}
+    L1 -->|>=80%| L1HIGH[得分 0.8~1.0]
+    L1 -->|50%~80%| L1MID[得分 0.5~0.8]
+    L1 -->|<50%| L1LOW[得分 0.0~0.5]
+
+    L1HIGH --> L2{Embedding 相似度}
+    L1MID --> L2
+    L1LOW --> L2
+
+    L2 -->|>=阈值(0.7)| L2HIGH[得分 0.7~1.0]
+    L2 -->|<阈值| L2LOW[得分 0.0~0.7]
+
+    L2HIGH --> L3{LLM 判断}
+    L2LOW --> L3
+
+    L3 -->|确认覆盖| FINAL_YES["covered"]
+    L3 -->|否认或不确定| FINAL_NO["not_covered"]
+
+    style L1 fill:#e3f2fd
+    style L2 fill:#f3e5f5
+    style L3 fill:#e8f5e9
 ```
 
-### 8.2 Prompt Injection 防护
+**各层权重分配的设计理由**:
+
+| 层级 | 权重 | 权衡考量 |
+|------|------|---------|
+| 关键词 | 0.2 | 只能检测字面匹配，无法理解同义表述，权重最低 |
+| Embedding | 0.3 | 能捕获语义相似性，但可能受向量质量影响，权重中等 |
+| LLM | 0.5 | 具备真正的语义理解能力，是最可靠的判断依据，权重最高 |
+
+**Embedding 层阈值机制**:
 
 ```python
-DANGEROUS_PATTERNS = [
-    r'忽略之前的指令',
-    r'ignore.*instructions',
-    r'System\s*:',
-    r'You are now',
-    r'Forget everything',
-    r'新指令[:：]',
-    r'<\|im_start\|>',
-]
-
-def sanitize_input(text: str) -> str:
-    """
-    输入净化：检测并移除潜在的 Prompt 注入。
-    
-    防护策略：
-    1. 正则匹配已知注入模式
-    2. 移除或替换可疑内容
-    3. 记录安全事件日志
-    """
-    for pattern in DANGEROUS_PATTERNS:
-        if re.search(pattern, text, re.IGNORECASE):
-            logger.warning(f"Detected potential injection: {pattern}")
-            text = re.sub(pattern, '[内容已屏蔽]', text, flags=re.IGNORECASE)
-    return text
+def _embedding_similarity(self, message, point):
+    threshold = getattr(point, "threshold", 0.7)  # 默认 0.7
+    query_emb = self.embedding_service.encode_query(message)
+    point_emb = self.embedding_service.encode_query(point.description)
+    similarity = self._cosine_similarity(query_emb, point_emb)
+    # 如果超过阈值返回满分 1.0，否则按比例折算
+    return 1.0 if similarity >= threshold else similarity / threshold
 ```
 
-### 8.3 输出过滤
+当余弦相似度超过阈值（默认 0.7）时直接返回满分 1.0；低于阈值时按比例线性折算。这种设计避免了低相似度时的硬截断。
+
+### 2.3 ExpressionCoach -- 表达教练
+
+**源文件位置**: [evaluator.py](src/umu_sales_trainer/core/evaluator.py) （`ExpressionCoach` 类）
+
+**类签名**: `ExpressionCoach(llm_service: LLMService)`
+
+**核心方法调用链**:
+
+```
+evaluate(message, context)
+  |-- try:
+  |     |-- _llm_evaluate(message) -> ExpressionAnalysis
+  |     |     |-- 构建五级评分 Prompt
+  |     |     |-- llm.invoke([HumanMessage(prompt)])
+  |     |     |-- _parse_expression_response(content) -> ExpressionAnalysis
+  |     |-- _generate_suggestions(message, analysis) -> list[Suggestion]
+  |           |-- 遍历 clarity/professionalism/persuasiveness
+  |           |-- 对 <7 分维度调用 _build_suggestion_for_dimension()
+  |-- except:
+  |     |-- _rule_based_expression_analysis(message) -> ExpressionAnalysis (降级)
+  |     |-- _generate_suggestions_from_rules(analysis) -> list[Suggestion] (降级)
+  |-- return ExpressionResult(analysis, suggestions, raw_length=len(message))
+```
+
+**LLM 评分 Prompt 的严格性设计**:
+
+评分 Prompt 使用了严格的五级制评分标准，每个维度分为 5 个等级（1-3 分为差 / 4-5 分为中下 / 6-7 分为中上 / 8-9 分为良 / 10 分为优），并明确要求"不要宽容，要客观反映真实水平"。这避免了 LLM 倾向于给出中高分的常见问题。
+
+**规则降级分析的指标体系**:
+
+当 LLM 不可用时，规则引擎通过以下指标估算分数：
+
+| 维度 | 分析指标 | 加分/扣分条件 |
+|------|---------|-------------|
+| 清晰度 | 平均句子长度 | 15-50 字: +1; <10 或 >70: -1 |
+| 清晰度 | 标点使用 | 有逗号和顿号: +1 |
+| 清晰度 | 长/短句比例 | 长句>40%: -1; 短句>50%: -1 |
+| 清晰度 | 词汇多样性 | unique/total < 0.6: -1 |
+| 专业性 | 术语密度 | 每匹配到一个专业术语: +1（上限 10） |
+| 说服力 | 数据百分比 | 出现 `X%`: +1 |
+| 说服力 | 对比论证 | 出现相比/优于/低于: +1 |
+| 说服力 | 行动号召 | 出现建议/推荐/可以考虑: +1 |
+| 说服力 | 递进论述 | 出现而且/此外/同时/更重要: +1 |
+
+### 2.4 GuidanceMentor -- 智能引导导师
+
+**源文件位置**: [guidance.py](src/umu_sales_trainer/core/guidance.py)
+
+**类签名**: `GuidanceMentor(llm_service: LLMService)`
+
+**核心方法调用链**:
+
+```
+generate_guidance(coverage_result, expression_result, conv_analysis, semantic_points, customer_profile, overall_score)
+  |-- 双条件检查: coverage >= 0.8 AND score >= 70?
+  |     |-- YES -> return GuidanceResult(summary="表现优秀！", is_actionable=False)
+  |-- NO:
+  |     |-- _build_priority_items(...) -> list[GuidanceItem]
+  |     |     |-- 遍历 uncovered_points -> high urgency items
+  |     |     |-- 遍历 expression dimensions (<6: high, 6-7: medium)
+  |     |     |-- 遍历 objections (前2个) -> medium urgency items
+  |     |-- items.sort(by urgency: high=0, medium=1, low=2)
+  |     |-- _generate_summary(items, coverage) -> str
+  |     |-- return GuidanceResult(priority_list, summary, is_actionable=True)
+```
+
+**紧急度阈值常量**:
 
 ```python
-def sanitize_output(response: str) -> str:
-    """
-    输出净化：防止 LLM 泄露内部信息。
-    
-    需要过滤的内容：
-    1. System Prompt 片段
-    2. 内部指令残留
-    3. 思维链（Chain of Thought）泄露
-    4. 敏感配置信息
-    """
-    # 移除可能的思维链标记
-    response = re.sub(r'\<\w*thought\w*\>.*?\<\/\w*thought\w*\>', '', response, flags=re.DOTALL)
-    
-    # 移除可能的 System 标记
-    response = re.sub(r'\[System\].*', '', response)
-    
-    return response.strip()
+URGENCY_THRESHOLDS = {"high": 0.5, "medium": 0.8, "low": 1.0}
 ```
 
-### 8.4 API 安全最佳实践
+这些阈值用于优秀态判定（`coverage_rate >= URGENCY_THRESHOLDS["low"]` 即 >= 80% 时可能触发优秀），同时也暗示了紧急度的分级标准。
 
-| 措施 | 实现方式 | 防护目标 |
-|------|----------|----------|
-| **HTTPS** | Uvicorn SSL 配置 | 传输加密 |
-| **CORS** | 中间件白名单 | 跨域控制 |
-| **Rate Limiting** | 令牌桶算法 | 防止滥用 |
-| **Input Size Limit** | Pydantic validator | DoS 防护 |
-| **Output Truncation** | 响应截断 | 信息泄露防护 |
-| **Audit Log** | 结构化日志 | 可追溯性 |
+**引导项模板系统**:
+
+每个表达维度的改进建议使用了预定义的模板：
+
+| 维度 | advice（建议方向） | example（参考话术） |
+|------|-------------------|-------------------|
+| clarity | 优化语句结构，使用'总-分-总'模式 | 先说核心观点（关于XX），再展开具体数据支撑，最后总结要点 |
+| professionalism | 引用临床试验数据、权威指南或真实案例 | 根据XX研究显示（n=XXX），患者HbA1c平均降低X%，p<0.05 |
+| persuasiveness | 采用'痛点-方案-证据-行动'四步法 | 您提到的XX问题确实存在（痛点），我们的方案是XX（方案），临床证明XX（证据），建议先试用（行动） |
+
+### 2.5 CustomerSimulator -- AI 客户模拟器
+
+**源文件位置**: [workflow.py]（`_node_simulate`, `_generate_ai_response`, `_build_customer_system_prompt` 函数）
+
+CustomerSimulator 不是独立的 Agent 类，而是工作流中的一个节点函数。它基于以下信息生成 AI 客户回复：
+
+| 输入来源 | 用途 |
+|---------|------|
+| `customer_profile` | 姓名、职位、机构、性格、关注点 |
+| `product_info` | 产品名称（用于生成有针对性的回应） |
+| `conversation_analysis.stage` | 当前销售阶段（影响回复风格和内容倾向） |
+| `evaluation_result.overall_score` | 当前评分（注入 System Prompt 让 AI 客户"知道"销售表现） |
+| `messages`（最近 6 条） | 对话历史上下文 |
+
+**System Prompt 角色设定要点**:
+
+- 明确定义 AI 扮演的是**客户**（医生/采购方），对方是**销售代表**
+- 注入客户的性格特征（如"专业审慎，注重数据和循证医学证据"）
+- 列出客户的核心关注点
+- 定义 6 条对话规则（自称方式、回复长度、追问习惯、反对意见等）
+
+**降级方案 `_generate_fallback_response()`**:
+
+当 LLM 不可用时，根据当前销售阶段选择预设模板回复：
+
+| 阶段 | 兜底回复 |
+|------|---------|
+| opening | "您好，请简要介绍一下您今天想聊什么？我时间比较紧。" |
+| needs_discovery | "嗯，我想了解更多细节。您能具体说说这个产品的优势在哪里吗？" |
+| presentation | "听起来不错，但我需要看到更多的临床数据支撑。有没有头对头的研究？" |
+| objection_handling | "我理解您的说法，但这一点我还是有些顾虑..." |
+| closing | "好的，让我再考虑一下。您可以先发一份详细资料给我。" |
 
 ---
 
-## 附录：关键设计决策记录 (ADR)
+## 3. 工作流引擎深度解析
 
-| ID | 决策 | 背景 | 结果 | 状态 |
-|----|------|------|------|------|
-| ADR-001 | 使用 LangGraph StateGraph | 对话流程有复杂条件分支 | 采用 StateGraph 而非 if-else | ✅ 已实施 |
-| ADR-002 | 三层语义检测 | 单层检测准确率不足 | 关键词+Embedding+LLM 融合 | ✅ 已实施 |
-| ADR-003 | RRF 融合算法 | 多 Collection 分数不可比 | 使用排名融合而非分数融合 | ✅ 已实施 |
-| ADR-004 | 双软删除 | SQLite + ChromaDB 一致性 | 补偿队列 + 重试机制 | ✅ 已实施 |
-| ADR-005 | ChromaDB 非 Milvus | 数据规模 < 100万 | 轻量级方案足够 | ✅ 已实施 |
-| ADR-006 | 无 Mock 测试 | 需要验证真实集成 | 所有集成测试使用真实 API | ✅ 已实施 |
+### 3.1 LangGraph StateGraph 编排细节
+
+工作流的创建入口是 `create_workflow()` 函数：
+
+```python
+def create_workflow(embedding_service, llm_service):
+    # 1. 实例化 4 个 Agent
+    conversation_analyst = ConversationAnalyst(llm_service)
+    semantic_expert = SemanticCoverageExpert(embedding_service, llm_service)
+    expression_coach = ExpressionCoach(llm_service)
+    guidance_mentor = GuidanceMentor(llm_service)
+
+    # 2. 创建 StateGraph
+    graph = StateGraph(WorkflowState)
+
+    # 3. 注册 9 个节点（含 start/end）
+    graph.add_node("start", _node_start)
+    graph.add_node("parallel_fanout", _node_parallel_fanout)
+    # ... 其余节点
+
+    # 4. 定义边（含条件边）
+    graph.set_entry_point("start")
+    graph.add_edge("start", "parallel_fanout")
+    # ... fan-out edges
+    graph.add_conditional_edges("synthesize", _should_generate_guidance, {...})
+
+    # 5. 编译为可执行工作流
+    return graph.compile()
+```
+
+### 3.2 WorkflowState 字段依赖关系
+
+```mermaid
+graph TD
+    subgraph 外部输入[外部写入]
+        EXT1[session_id]
+        EXT2[sales_message]
+        EXT3[current_message]
+        EXT4[customer_profile]
+        EXT5[product_info]
+        EXT6[semantic_points]
+        EXT7[messages]
+    end
+
+    subgraph CA节点产生[conversation_analyze 写入]
+        CA_OUT[conversation_analysis]
+    end
+
+    subgraph SE节点产生[semantic_eval 写入]
+        SE_OUT[coverage_result]
+    end
+
+    subgraph EE节点产生[expression_eval 写入]
+        EE_OUT[expression_result]
+    end
+
+    subgraph SYN节点产生[synthesize 写入]
+        SYN_OUT[evaluation_result]
+    end
+
+    subgraph GM节点产生[guidance 写入]
+        GM_OUT[guidance_result]
+    end
+
+    subgraph SIM节点产生[simulate 写入]
+        SIM_OUT[ai_response]
+    end
+
+    EXT1 & EXT2 & EXT3 & EXT4 & EXT7 --> CA_OUT
+    EXT1 & EXT2 & EXT6 --> SE_OUT
+    EXT1 & EXT2 & EXT4 --> EE_OUT
+
+    SE_OUT & EE_OUT & CA_OUT --> SYN_OUT
+
+    SYN_OUT & SE_OUT & EE_OUT & CA_OUT & EXT6 & EXT4 --> GM_OUT
+
+    SYN_OUT & EXT4 & EXT5 & CA_OUT & EXT7 --> SIM_OUT
+
+    style CA_OUT fill:#e1f5fe
+    style SE_OUT fill:#f3e5f5
+    style EE_OUT fill:#e8f5e9
+    style SYN_OUT fill:#e0f2f1
+    style GM_OUT fill:#fff3e0
+    style SIM_OUT fill:#fce4ec
+```
+
+### 3.3 条件路由真值表
+
+`_should_generate_guidance()` 函数的真值表如下（`C` = coverage_rate, `S` = overall_score）：
+
+| C < 0.8 | S < 70 | 返回值 | 含义 | 引导节点执行？ |
+|:-------:|:-------:|:-------:|------|:------------:|
+| T | T | "yes" | 覆盖不足且分低 | **执行** |
+| T | F | "yes" | 覆盖不足但分高 | **执行** |
+| F | T | "yes" | 覆盖充足但分低 | **执行** |
+| F | F | "no" | 覆盖充足且分高 | **跳过** |
+
+只有第四种情况（F, F）即 `coverage >= 0.8 AND score >= 70` 时才跳过引导。
+
+### 3.4 错误恢复策略
+
+各节点的错误处理策略：
+
+| 节点 | 错误处理方式 | 降级行为 |
+|------|------------|---------|
+| `start` | 返回 `{"error": "..."}` | 后续节点检测到 error 字段可提前终止 |
+| `conversation_analyze` | try/except 包裹 LLM 调用 | 降级为 `_rule_based_analysis()` |
+| `semantic_eval` | try/except 包裹 LLM 层 | LLM judgment 失败返回 0.5（中性分数） |
+| `expression_eval` | try/except 包裹 LLM 调用 | 降级为 `_rule_based_expression_analysis()` |
+| `synthesize` | 无 LLM 调用，纯计算 | 不涉及 LLM，不会失败 |
+| `guidance` | try/except 包裹 LLM 增强 | 返回基础引导结果（无 LLM 增强） |
+| `simulate` | try/except 包裹 LLM 调用 | 降级为 `_generate_fallback_response()` |
+| `end` | 仅日志记录 | 无操作 |
+
+---
+
+## 4. 数据模型与状态管理
+
+### 4.1 核心 Pydantic/Dataclass 模型清单
+
+| 模型名 | 所在文件 | 用途 | 关键字段 |
+|--------|---------|------|---------|
+| `WorkflowState` | workflow.py | 工作流共享状态 | 14 个字段（见 README 第 4.4 节） |
+| `ConversationAnalysis` | analyzer.py | 对话分析结果 | stage, intent, objections, sentiment, confidence |
+| `CoverageResult` | evaluator.py | 语义覆盖结果 | coverage_status(dict), coverage_rate(float), uncovered_points(list) |
+| `ExpressionResult` | evaluator.py | 表达评估结果 | analysis(ExpressionAnalysis), suggestions(list), raw_message_length(int) |
+| `ExpressionAnalysis` | evaluator.py (models) | 三维评分 | clarity(int), professionalism(int), persuasiveness(int) |
+| `EvaluationResult` | models/evaluation.py | 最终聚合结果 | session_id, coverage_status, expression_analysis, coverage_rate, overall_score |
+| `GuidanceResult` | guidance.py | 引导建议结果 | priority_list(list), summary(str), is_actionable(bool) |
+| `GuidanceItem` | guidance.py | 单条引导项 | gap, urgency, suggestion, talking_point, expected_effect |
+| `Suggestion` | evaluator.py | 表达改进建议 | dimension, current_score, advice, example |
+| `SemanticPoint` | models/semantic.py | 语义点定义 | point_id, description, keywords(list), weight(float) |
+| `Message` | models/conversation.py | 对话消息 | session_id, role, content, turn |
+| `CustomerProfile` | models/customer.py | 客户画像 | name, hospital, position, concerns, personality |
+| `ProductInfo` | models/product.py | 产品信息 | name, description, core_benefits, key_selling_points |
+
+### 4.2 API 请求/响应模型
+
+| 模型名 | 用途 | 关键字段 |
+|--------|------|---------|
+| `CreateSessionRequest` | 创建会话请求 | customer_profile(dict), product_info(dict), semantic_points(list) |
+| `CreateSessionResponse` | 创建会话响应 | session_id, status, created_at |
+| `SendMessageRequest` | 发送消息请求 | content(str, min_length=1) |
+| **`SendMessageResponse`** | **发送消息响应（核心）** | session_id, turn, ai_response, **evaluation(dict)**, **guidance(dict\|None)** |
+| `EvaluationResponse` | 评估查询响应 | session_id, coverage_status, coverage_labels, coverage_rate, overall_score, expression_analysis, suggestions, conversation_analysis |
+| `HealthResponse` | 健康检查响应 | status, timestamp |
+
+### 4.3 延迟初始化模式
+
+API Router 中使用了延迟初始化（lazy initialization）模式来创建工作流实例：
+
+```python
+_workflow_instance = None
+
+def _get_workflow():
+    global _workflow_instance
+    if _workflow_instance is None:
+        embedding_service = EmbeddingService()
+        llm_service = create_llm("dashscope")
+        _workflow_instance = create_workflow(embedding_service, llm_service)
+    return _workflow_instance
+```
+
+**设计理由**：避免模块导入时就读取 `.env` 文件和初始化 LLM 连接。在实际请求到达时才完成初始化，确保 `.env` 已被 `main.py` 的 `load_dotenv()` 正确加载。
+
+---
+
+## 5. 评分算法数学推导
+
+### 5.1 完整公式
+
+$$
+\text{Score} = \text{clamp}\left(\left(\underbrace{\sqrt{r_c} \times 40}_{\text{Coverage}} + \underbrace{\frac{0.2 C + 0.3 P + 0.5 S}{10} \times 35}_{\text{Expression}}\right) \times \underbrace{p(t)}_{\text{Turn Penalty}} + \underbrace{q(l, r_c)}_{\text{Quality}},\ 0,\ 100\right)
+$$
+
+其中：
+- $r_c$ = coverage_rate（0 到 1）
+- $C$ = clarity 评分（1 到 10）
+- $P$ = professionalism 评分（1 到 10）
+- $S$ = persuasiveness 评分（1 到 10）
+- $t$ = 当前轮次（从 1 开始）
+- $l$ = 消息字符数
+- $p(t)$ = 回合惩罚系数
+- $q(l, r_c)$ = 质量调整分
+
+### 5.2 各因子对总分的影响权重可视化
+
+假设典型场景（第 3 轮，覆盖率 67%，清晰度 7/专业 6/说服力 5，消息长度 80 字）：
+
+| 因子 | 计算值 | 占原始总分比 |
+|------|--------|------------|
+| 覆盖率分 | $\sqrt{0.67} \times 40 = 32.7$ | **62.8%** |
+| 表达分 | $(7\times0.2 + 6\times0.3 + 5\times0.5)/10 \times 35 = 19.3$ | **37.2%** |
+| 原始总分 | $32.7 + 19.3 = 52.0$ | 100% |
+| 回合惩罚 | $\times 0.86$ | -- |
+| 惩罚后 | $44.7$ | -- |
+| 质量调整 | $+ 0.0$ | -- |
+| **最终得分** | **44.7 → 45** | -- |
+
+覆盖率因子占总分约 63%，表达力因子约占 37%。这是因为覆盖率上限 40 分高于表达力上限 35 分，且 sqrt 压缩在高覆盖率时仍能贡献可观分数。
+
+### 5.3 评分因子的敏感度分析
+
+#### 覆盖率敏感度
+
+| 覆盖率变化 | 覆盖分变化 | 变化幅度 |
+|-----------|-----------|---------|
+| 0% → 33% | 0 → 23.0 | +23.0 |
+| 33% → 67% | 23.0 → 32.7 | +9.7 |
+| 67% → 100% | 32.7 → 40.0 | +7.3 |
+
+sqrt 函数导致**边际收益递减**：从 0% 提升到 33% 获得 23 分，而从 67% 提升到 100% 仅获得 7.3 分。这鼓励销售代表优先保证基础覆盖，而非过度堆砌已覆盖的关键词。
+
+#### 说服力敏感度（在第 3 轮，覆盖率 67%，其他维度不变）
+
+| 说服力变化 | 表达分变化 | 最终得分变化 |
+|-----------|-----------|------------|
+| 4 → 5 | 17.5 → 19.3 | 43 → 45 (+2) |
+| 5 → 7 | 19.3 → 22.8 | 45 → 49 (+4) |
+| 7 → 9 | 22.8 → 26.3 | 49 → 54 (+5) |
+
+说服力每提升 2 分，最终得分提升 2-5 分（受回合惩罚放大）。这验证了说服力权重最高（0.5）的设计效果。
+
+---
+
+## 6. 前端数据流与渲染
+
+### 6.1 API 响应到面板映射
+
+前端 `app.js` 接收 `SendMessageResponse` 后，将各字段分发到对应的面板更新函数：
+
+```mermaid
+graph LR
+    RESP[SendMessageResponse] --> AI[updateAIPanel<br/>ai_response]
+    RESP --> COV[updateCoveragePanel<br/>evaluation.coverage_status<br/>evaluation.coverage_rate<br/>evaluation.coverage_labels]
+    RESP --> EXP[updateExpressionPanel<br/>evaluation.expression_analysis<br/>evaluation.suggestions]
+    RESP --> CONV[updateInsightPanel<br/>evaluation.conversation_analysis]
+    RESP --> GUID[updateGuidancePanel<br/>guidance]
+
+    AI --> P1[AI 客户回复面板]
+    COV --> P2[语义覆盖面板]
+    EXP --> P3[表达评分面板]
+    CONV --> P4[会话洞察面板]
+    GUID --> P5[智能引导面板]
+```
+
+### 6.2 双态引导面板的状态机
+
+```mermaid
+stateDiagram-v2
+    [*] --> CheckActionable: 收到 guidance 数据
+
+    CheckActionable --> RenderExcellent: is_actionable == false
+    CheckActionable --> RenderImprovement: is_actionable == true
+
+    state RenderExcellent {
+        [*] --> SetGreenCSS
+        SetGreenCSS --> ShowAwardIcon
+        ShowAwardIcon --> ShowSummaryAndScore
+        ShowSummaryAndScore --> DefaultCollapsed
+    }
+
+    state RenderImprovement {
+        [*] --> SetYellowCSS
+        SetYellowCSS --> ShowBulbIcon
+        ShowBulbIcon --> ShowSummary
+        ShowSummary --> RenderPriorityList
+        RenderPriorityList --> HighlightHighUrgency
+        HighlightHighUrgency --> DefaultExpanded
+    }
+
+    RenderExcellent --> [*]: 面板就绪
+    RenderImprovement --> [*]: 面板就绪
+```
+
+### 6.3 关键 JavaScript 函数说明
+
+| 函数名 | 触发时机 | 功能 |
+|--------|---------|------|
+| `sendMessage()` | 用户点击发送按钮 | 收集输入内容，POST 到 `/api/v1/sessions/{id}/messages`，处理响应并更新全部面板 |
+| `updateGuidancePanel(guidance)` | sendMessage 回调中 | 根据 `is_actionable` 决定渲染绿色优秀态还是黄色改进态 |
+| `toggleGuidance()` | 用户点击引导面板标题栏 | 切换面板展开/折叠状态 |
+| `escapeHtml(str)` | 所有面板渲染前 | XSS 防护，转义 HTML 特殊字符 |
