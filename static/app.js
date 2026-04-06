@@ -5,7 +5,7 @@
  * including session management, message handling, and semantic point coverage tracking.
  */
 
-const API_BASE = '/api';
+const API_BASE = '/api/v1';
 
 const appState = {
   currentSessionId: null,
