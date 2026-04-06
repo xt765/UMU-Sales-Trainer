@@ -12,7 +12,7 @@
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
-                <div class="logo">🎯</div>
+                <div class="logo">AI</div>
                 <div class="sidebar-title">
                     <h1>AI 销售训练</h1>
                     <p>智能对话模拟系统</p>
@@ -36,15 +36,15 @@
                 </div>
                 <div class="profile-details">
                     <div class="detail-item">
-                        <i data-lucide="target"></i>
+                        <i data-lucide="target" class="detail-icon"></i>
                         <span>糖尿病控制率</span>
                     </div>
                     <div class="detail-item">
-                        <i data-lucide="shield"></i>
+                        <i data-lucide="shield-check" class="detail-icon"></i>
                         <span>药物安全性</span>
                     </div>
                     <div class="detail-item">
-                        <i data-lucide="clipboard-list"></i>
+                        <i data-lucide="file-text" class="detail-icon"></i>
                         <span>注重循证医学证据</span>
                     </div>
                 </div>
@@ -52,7 +52,7 @@
 
             <div class="coverage-section">
                 <div class="section-title">
-                    <i data-lucide="check-square"></i>
+                    <i data-lucide="check-circle-2"></i>
                     <span>语义点覆盖</span>
                 </div>
                 <div class="coverage-items" id="coverageItems">
@@ -78,10 +78,16 @@
                         <div class="item-status not-covered"></div>
                     </div>
                 </div>
-                <div class="progress-bar">
-                    <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                
+                <div class="progress-container">
+                    <div class="progress-header">
+                        <span class="progress-label">总体覆盖</span>
+                        <span class="progress-value" id="progressValue">0%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                    </div>
                 </div>
-                <div class="progress-text" id="progressText">0% 覆盖</div>
             </div>
         </aside>
 
@@ -95,11 +101,11 @@
                 <div class="chat-actions">
                     <button class="btn btn-primary" id="btnNewChat">
                         <i data-lucide="plus"></i>
-                        新建会话
+                        <span>新建会话</span>
                     </button>
                     <button class="btn btn-secondary" id="btnDeleteSession" disabled>
-                        <i data-lucide="trash-2"></i>
-                        结束会话
+                        <i data-lucide="log-out"></i>
+                        <span>结束会话</span>
                     </button>
                 </div>
             </header>
@@ -108,10 +114,8 @@
                 <div class="message ai">
                     <div class="message-avatar">AI</div>
                     <div class="message-content">
-                        您好！我是您的AI销售训练助手。今天我们将模拟一场与张主任的销售对话。
-                        <br><br>
-                        张主任是内分泌科主任，关注糖尿病控制率和药物安全性，注重循证医学证据。
-                        <br><br>
+                        您好！我是您的AI销售训练助手。今天我们将模拟一场与张主任的销售对话。<br><br>
+                        张主任是内分泌科主任，关注糖尿病控制率和药物安全性，注重循证医学证据。<br><br>
                         请开始您的销售开场...
                     </div>
                 </div>
