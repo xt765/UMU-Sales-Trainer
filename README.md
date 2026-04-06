@@ -1410,4 +1410,4 @@ uv run pytest tests/test_*_integration.py -v
 
 ## 十二、License
 
-[MIT](https://opensource.org/licenses/MIT) © 2024 UMU
+[MIT](https://opensource.org/licenses/MIT) © 2026 xt765
