@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI销售训练Chatbot系统</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="header">
+            <h1 class="header-title">AI销售训练Chatbot系统</h1>
+        </header>
+
+        <main class="main-content">
+            <aside class="sidebar">
+                <div class="customer-card" id="customerCard">
+                    <h2 class="customer-card-title">客户画像</h2>
+                    <div class="customer-info">
+                        <p class="customer-name">张主任</p>
+                        <p class="customer-role">某三甲医院采购负责人</p>
+                        <p class="customer-detail">预算充足，对高端医疗设备有采购需求</p>
+                    </div>
+                </div>
+
+                <div class="progress-section">
+                    <h3 class="progress-title">语义点覆盖</h3>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                    </div>
+                    <p class="progress-text"><span id="progressPercent">0</span>%</p>
+                </div>
+            </aside>
+
+            <section class="chat-section">
+                <div class="chat-header">
+                    <h2 class="chat-title">会话区域</h2>
+                    <button class="btn-new-chat" id="btnNewChat">新建会话</button>
+                </div>
+
+                <div class="chat-messages" id="chatMessages">
+                    <div class="message message-ai">
+                        <div class="message-avatar">AI</div>
+                        <div class="message-content">
+                            <p>您好！我是您的AI销售训练助手。今天我们将模拟一场与张主任的销售对话，请问您准备如何开场？</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="chat-input-area">
+                    <input
+                        type="text"
+                        class="chat-input"
+                        id="chatInput"
+                        placeholder="请输入您的回复..."
+                        autocomplete="off"
+                    >
+                    <button class="btn-send" id="btnSend">发送</button>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

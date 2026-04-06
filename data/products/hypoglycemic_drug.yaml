@@ -1,0 +1,32 @@
+# 降糖产品资料配置文件
+# 用于AI销售训练Chatbot系统
+# 产品：优血糖 - DPP-4抑制剂
+
+name: 优血糖
+type: DPP-4抑制剂
+manufacturer: XX制药
+
+# 核心优势
+core_benefits:
+  HbA1c改善: 平均降低0.8%
+  低血糖风险低: 单药不引起低血糖
+  用药便利: 每日一次口服
+  心血管安全: 已完成CVOT研究
+
+# 产品规格
+specifications:
+  dosage: 100mg/片
+  packaging: 7片/盒
+  price: 198元/盒
+  reimbursement: 医保乙类
+
+# 临床数据
+clinical_data:
+  纳入研究: 5项III期临床
+  样本量: 3000+例
+
+# 销售卖点
+selling_points:
+  - 卓越的降糖效果
+  - 安全性好
+  - 依从性高
