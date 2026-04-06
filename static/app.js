@@ -498,11 +498,12 @@ function updateGuidancePanel(guidance) {
   if (!guidance || !guidance.is_actionable) {
     panel.className = 'guidance-panel guidance-panel--excellent';
     const summary = guidance?.summary || '表现优秀';
+    const score = guidance?.overall_score ?? 0;
     panel.innerHTML = `
       <div class="guidance-header" onclick="toggleGuidance()">
         <span class="guidance-summary">
           <i data-lucide="award"></i>
-          <span class="excellent-badge">${escapeHtml(summary) || '🎉 表现优秀，继续保持！'}</span>
+          <span class="excellent-badge">${escapeHtml(summary)}${score > 0 ? `（${score}分）` : ''}</span>
         </span>
         <i data-lucide="chevron-down" class="guidance-toggle-icon"></i>
       </div>

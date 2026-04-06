@@ -10,6 +10,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from umu_sales_trainer.core.guidance import GuidanceResult
 from umu_sales_trainer.core.workflow import WorkflowState, create_workflow
 from umu_sales_trainer.models.conversation import ConversationSession, Message
 from umu_sales_trainer.models.customer import CustomerProfile
@@ -535,21 +536,29 @@ def _format_evaluation(
     return result
 
 
-def _format_guidance(guidance_result) -> Optional[dict[str, Any]]:
+def _format_guidance(
+    guidance_result: Optional[GuidanceResult],
+    overall_score: float = 0.0,
+) -> Optional[dict[str, Any]]:
     """格式化引导结果为字典。
+
+    始终返回字典（不再在 is_actionable=False 时返回 None），
+    让前端能区分"改进态"和"优秀态"两种面板状态。
 
     Args:
         guidance_result: GuidanceResult 对象
+        overall_score: 当前综合评分，传递给前端用于优秀态显示
 
     Returns:
-        格式化的字典，或 None（如果不需要引导）
+        格式化的字典（始终非 None），包含 is_actionable 标志
     """
-    if guidance_result is None or not guidance_result.is_actionable:
+    if guidance_result is None:
         return None
 
     return {
         "summary": guidance_result.summary,
         "is_actionable": guidance_result.is_actionable,
+        "overall_score": round(overall_score, 0),
         "priority_list": [
             {
                 "gap": item.gap,
@@ -558,7 +567,7 @@ def _format_guidance(guidance_result) -> Optional[dict[str, Any]]:
                 "talking_point": item.talking_point,
                 "expected_effect": item.expected_effect,
             }
-            for item in guidance_result.priority_list
+            for item in (guidance_result.priority_list or [])
         ],
     }
 
@@ -722,7 +731,10 @@ def send_message(
         }
     )
 
-    guidance_dict = _format_guidance(guide_result)
+    guidance_dict = _format_guidance(
+        guide_result,
+        overall_score=evaluation.overall_score if evaluation else 0.0,
+    )
 
     return SendMessageResponse(
         session_id=session_id,

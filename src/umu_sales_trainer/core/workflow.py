@@ -345,8 +345,11 @@ def _node_synthesize(state: WorkflowState) -> dict[str, Any]:
 def _should_generate_guidance(state: WorkflowState) -> str:
     """条件路由：判断是否需要生成引导建议。
 
-    当覆盖率低于 80% 时走 guidance 节点，
-    否则直接跳到 simulate 节点。
+    以下任一条件满足时走 guidance 节点：
+    - 覆盖率低于 80%（语义点未覆盖完整）
+    - 综合评分低于 70 分（表达能力需改进）
+
+    仅当覆盖率 ≥ 80% 且评分 ≥ 70 时才跳过引导（真正优秀）。
 
     Args:
         state: 工作流状态
@@ -355,7 +358,12 @@ def _should_generate_guidance(state: WorkflowState) -> str:
         "yes" 或 "no"
     """
     coverage = state.get("coverage_result")
+    eval_result = state.get("evaluation_result")
+    overall_score = eval_result.overall_score if eval_result else 0.0
+
     if coverage and coverage.coverage_rate < 0.8:
+        return "yes"
+    if overall_score < 70:
         return "yes"
     return "no"
 
@@ -381,7 +389,14 @@ def _make_node_guidance(mentor: GuidanceMentor):
         Returns:
             包含 guidance_result 的状态更新
         """
-        logger.info("[guidance] Generating structured guidance")
+        eval_result = state.get("evaluation_result")
+        overall_score = eval_result.overall_score if eval_result else 0.0
+
+        logger.info(
+            "[guidance] Generating structured guidance | coverage=%.2f overall_score=%s",
+            (state.get("coverage_result") or CoverageResult()).coverage_rate,
+            overall_score,
+        )
 
         result = mentor.generate_guidance(
             coverage_result=state.get("coverage_result") or CoverageResult(),
@@ -389,6 +404,7 @@ def _make_node_guidance(mentor: GuidanceMentor):
             conversation_analysis=state.get("conversation_analysis"),
             semantic_points=state.get("semantic_points", []),
             customer_profile=state.get("customer_profile"),
+            overall_score=overall_score,
         )
 
         logger.info(

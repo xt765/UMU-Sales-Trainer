@@ -9,10 +9,9 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from langchain_core.messages import HumanMessage
 
@@ -92,14 +91,16 @@ class GuidanceMentor:
         self,
         coverage_result: CoverageResult,
         expression_result: ExpressionResult,
-        conversation_analysis: ConversationAnalysis | None,
-        semantic_points: list[SemanticPoint],
-        customer_profile: CustomerProfile | None,
+        conversation_analysis: ConversationAnalysis | None = None,
+        semantic_points: list[SemanticPoint] | None = None,
+        customer_profile: CustomerProfile | None = None,
+        overall_score: float = 0.0,
     ) -> GuidanceResult:
         """综合评估结果生成结构化引导。
 
-        当覆盖率达到 80% 以上时，返回空引导（is_actionable=False），
-        前端面板将自动折叠。
+        同时基于覆盖率和综合评分判断是否需要引导建议：
+        - 覆盖率 ≥ 80% 且 综合评分 ≥ 70 → 表现优秀（is_actionable=False）
+        - 否则 → 生成针对性改进建议
 
         Args:
             coverage_result: 语义覆盖检测结果
@@ -107,11 +108,12 @@ class GuidanceMentor:
             conversation_analysis: 对话分析结果（可选）
             semantic_points: 完整语义点列表（用于获取未覆盖点的描述）
             customer_profile: 客户画像（可选）
+            overall_score: 综合评分（0-100），用于优秀判定
 
         Returns:
             GuidanceResult 结构化引导结果
         """
-        if coverage_result.coverage_rate >= URGENCY_THRESHOLDS["low"]:
+        if coverage_result.coverage_rate >= URGENCY_THRESHOLDS["low"] and overall_score >= 70:
             return GuidanceResult(
                 summary="表现优秀，继续保持！",
                 is_actionable=False,
@@ -204,23 +206,27 @@ class GuidanceMentor:
             else:
                 continue
 
-            items.append(GuidanceItem(
-                gap=f"{config['name']}偏低（{score}/10分）",
-                urgency=urgency,
-                suggestion=config["advice"],
-                talking_point=config["example"],
-                expected_effect=f"提升{config['name']}至7分以上",
-            ))
+            items.append(
+                GuidanceItem(
+                    gap=f"{config['name']}偏低（{score}/10分）",
+                    urgency=urgency,
+                    suggestion=config["advice"],
+                    talking_point=config["example"],
+                    expected_effect=f"提升{config['name']}至7分以上",
+                )
+            )
 
         if conversation_analysis and conversation_analysis.objections:
             for obj in conversation_analysis.objections[:2]:
-                items.append(GuidanceItem(
-                    gap=f"检测到异议信号：{obj}",
-                    urgency="medium",
-                    suggestion=f"准备{obj}相关的应对策略和证据材料",
-                    talking_point="我理解您的顾虑，这一点确实很重要。让我从XX角度为您详细说明...",
-                    expected_effect="提前化解潜在异议，推进对话进程",
-                ))
+                items.append(
+                    GuidanceItem(
+                        gap=f"检测到异议信号：{obj}",
+                        urgency="medium",
+                        suggestion=f"准备{obj}相关的应对策略和证据材料",
+                        talking_point="我理解您的顾虑，这一点确实很重要。让我从XX角度为您详细说明...",
+                        expected_effect="提前化解潜在异议，推进对话进程",
+                    )
+                )
 
         return items
 
@@ -243,10 +249,7 @@ class GuidanceMentor:
         Returns:
             参考话术文本
         """
-        return (
-            f"关于{point_description}，我想特别强调的是："
-            f"我们的产品在这方面具有显著优势..."
-        )
+        return f"关于{point_description}，我想特别强调的是：我们的产品在这方面具有显著优势..."
 
     @staticmethod
     def _generate_summary(items: list[GuidanceItem], coverage_result: CoverageResult) -> str:
@@ -291,8 +294,11 @@ class GuidanceMentor:
             GuidanceResult LLM 增强后的引导结果
         """
         base_result = self.generate_guidance(
-            coverage_result, expression_result,
-            conversation_analysis, semantic_points, customer_profile,
+            coverage_result,
+            expression_result,
+            conversation_analysis,
+            semantic_points,
+            customer_profile,
         )
 
         if not base_result.is_actionable or not base_result.priority_list:
