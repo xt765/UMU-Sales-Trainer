@@ -7,6 +7,20 @@
 
 const API_BASE = '/api/v1';
 
+const STAGE_LABELS = {
+  'opening': '开场破冰',
+  'needs_discovery': '需求探查',
+  'presentation': '产品呈现',
+  'objection_handling': '异议处理',
+  'closing': '缔结成交'
+};
+
+const DIMENSION_LABELS = {
+  'clarity': '清晰度',
+  'professionalism': '专业性',
+  'persuasiveness': '说服力'
+};
+
 const appState = {
   currentSessionId: null,
   sessions: [],
@@ -172,7 +186,7 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-function updateExpressionDisplay(expression) {
+function updateExpressionDisplay(expression, suggestions) {
   if (!expression) return;
   
   let exprContainer = document.getElementById('expressionAnalysis');
@@ -218,6 +232,25 @@ function updateExpressionDisplay(expression) {
         el.className = 'metric-value ' + (val >= 7 ? 'high' : val >= 4 ? 'medium' : 'low');
       }
     });
+
+    const existingSuggest = exprContainer.querySelector('.suggestion-list');
+    if (existingSuggest) existingSuggest.remove();
+
+    if (suggestions && suggestions.length > 0) {
+      const suggestDiv = document.createElement('div');
+      suggestDiv.className = 'suggestion-list';
+      suggestDiv.innerHTML = '<h4>改进建议</h4>' +
+        suggestions.map(s => {
+          const dimLabel = DIMENSION_LABELS[s.dimension] || s.dimension;
+          return `
+          <div class="suggestion-item">
+            <span class="suggestion-dim">${escapeHtml(dimLabel)}(${s.current_score}分)</span>
+            <span class="suggestion-advice">${escapeHtml(s.advice)}</span>
+            ${s.example ? `<div class="suggestion-example">${escapeHtml(s.example)}</div>` : ''}
+          </div>`;
+        }).join('');
+      exprContainer.querySelector('.expression-metrics').after(suggestDiv);
+    }
   }
 }
 
@@ -274,6 +307,47 @@ function updateSidebarProfile(customer) {
     `).join('');
     lucide.createIcons();
   }
+}
+
+function updateConversationInsight(analysis) {
+  if (!analysis || !analysis.stage) return;
+
+  let insightEl = document.getElementById('conversationInsight');
+  if (!insightEl) {
+    const profileSection = document.querySelector('.customer-profile');
+    const coverageSection = document.querySelector('.coverage-section');
+
+    if (profileSection && coverageSection) {
+      insightEl = document.createElement('div');
+      insightEl.id = 'conversationInsight';
+      insightEl.className = 'conversation-insight';
+      profileSection.parentNode.insertBefore(insightEl, coverageSection);
+    }
+  }
+
+  if (!insightEl) return;
+
+  const stageLabel = STAGE_LABELS[analysis.stage] || analysis.stage;
+  const stageClass = `stage-${analysis.stage}`;
+  const sentimentIcon = analysis.sentiment === 'positive' ? 'thumbs-up' : analysis.sentiment === 'cautious' ? 'alert-circle' : 'minus-circle';
+
+  let objectionsHtml = '';
+  if (analysis.objections && analysis.objections.length > 0) {
+    objectionsHtml = '<div class="objection-tags">' +
+      analysis.objections.map(obj => `<span class="objection-tag">${escapeHtml(obj)}</span>`).join('') +
+      '</div>';
+  }
+
+  insightEl.innerHTML = `
+    <div class="insight-header">
+      <span class="stage-badge ${stageClass}">${stageLabel}</span>
+      <i data-lucide="${sentimentIcon}" class="sentiment-icon"></i>
+    </div>
+    ${analysis.intent ? `<p class="intent-text">${escapeHtml(analysis.intent)}</p>` : ''}
+    ${objectionsHtml}
+  `;
+  insightEl.style.display = 'block';
+  lucide.createIcons();
 }
 
 async function createSession() {
@@ -357,7 +431,8 @@ async function createSession() {
     if (scoreEl) scoreEl.remove();
     
     showToast('会话创建成功！', 'success');
-    
+
+    setLoading(false);
     updateButtonStates();
     
   } catch (error) {
@@ -407,6 +482,56 @@ async function deleteSession() {
   }
 }
 
+function updateGuidancePanel(guidance) {
+  if (!guidance || !guidance.is_actionable) {
+    const existing = document.getElementById('guidancePanel');
+    if (existing) existing.style.display = 'none';
+    return;
+  }
+
+  let panel = document.getElementById('guidancePanel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'guidancePanel';
+    panel.className = 'guidance-panel';
+    elements.chatMessages.parentNode.insertBefore(panel, elements.chatMessages);
+  }
+
+  const urgencyIcons = { high: 'alert-triangle', medium: 'alert-circle', low: 'info' };
+
+  panel.innerHTML = `
+    <div class="guidance-header" onclick="toggleGuidance()">
+      <span class="guidance-summary">
+        <i data-lucide="lightbulb"></i>
+        ${escapeHtml(guidance.summary)}
+      </span>
+      <i data-lucide="chevron-down" class="guidance-toggle-icon"></i>
+    </div>
+    <div class="guidance-body">
+      ${guidance.priority_list.map(item => `
+        <div class="guidance-item urgency-${item.urgency}">
+          <div class="gap-text">${escapeHtml(item.gap)}</div>
+          <div class="suggestion-text">${escapeHtml(item.suggestion)}</div>
+          ${item.talking_point ? `<div class="talking-point">${escapeHtml(item.talking_point)}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>
+  `;
+
+  panel.style.display = 'block';
+  lucide.createIcons();
+}
+
+function toggleGuidance() {
+  const body = document.querySelector('.guidance-body');
+  const icon = document.querySelector('.guidance-toggle-icon');
+  if (body) {
+    body.style.display = body.style.display === 'none' ? 'block' : 'none';
+    if (icon) icon.setAttribute('data-lucide', body.style.display === 'none' ? 'chevron-down' : 'chevron-up');
+    lucide.createIcons();
+  }
+}
+
 async function sendMessageToAI(message, isInitial = false) {
   if (!appState.currentSessionId) return;
   
@@ -435,35 +560,38 @@ async function sendMessageToAI(message, isInitial = false) {
     
     if (data.evaluation) {
       appState.lastEvaluation = data.evaluation;
-      
+
       if (data.evaluation.coverage_status) {
-        const SEMANTIC_LABELS = {
-          'SP-001': 'HbA1c改善',
-          'SP-002': '安全性',
-          'SP-003': '服用方便',
-          'SP_EFFICACY': '疗效数据',
-          'SP_SAFETY': '安全性论证',
-          'SP_CONVENIENCE': '用药便利'
-        };
-        
+        const labels = data.evaluation.coverage_labels || {};
+
         const coverageData = Object.entries(data.evaluation.coverage_status).map(([id, status]) => ({
           name: id,
-          description: SEMANTIC_LABELS[id] || id,
+          description: labels[id] || id,
           status: status
         }));
-        
+
         if (coverageData.length > 0) {
           updateCoverageDisplay(coverageData);
         }
       }
-      
+
       if (data.evaluation.expression_analysis) {
-        updateExpressionDisplay(data.evaluation.expression_analysis);
+        updateExpressionDisplay(data.evaluation.expression_analysis, data.evaluation.suggestions);
       }
-      
+
       if (data.evaluation.overall_score !== undefined) {
         updateOverallScore(data.evaluation.overall_score);
       }
+
+      if (data.evaluation.conversation_analysis) {
+        updateConversationInsight(data.evaluation.conversation_analysis);
+      }
+    }
+
+    if (data.guidance) {
+      updateGuidancePanel(data.guidance);
+    } else {
+      updateGuidancePanel(null);
     }
     
     appState.messageCount++;

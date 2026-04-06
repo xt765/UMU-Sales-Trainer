@@ -10,13 +10,35 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from umu_sales_trainer.core.workflow import WorkflowState, invoke
+from umu_sales_trainer.core.workflow import WorkflowState, create_workflow
 from umu_sales_trainer.models.conversation import ConversationSession, Message
 from umu_sales_trainer.models.customer import CustomerProfile
 from umu_sales_trainer.models.evaluation import EvaluationResult
 from umu_sales_trainer.models.product import ProductInfo
 from umu_sales_trainer.models.semantic import SemanticPoint
 from umu_sales_trainer.services.database import DatabaseService, get_db_service
+from umu_sales_trainer.services.embedding import EmbeddingService
+from umu_sales_trainer.services.llm import create_llm
+
+_workflow_instance = None
+
+
+def _get_workflow():
+    """延迟初始化工作流实例。
+
+    首次调用时创建 EmbeddingService、LLMService 和编译后的 StateGraph，
+    后续调用直接返回已创建的实例。
+
+    Returns:
+        编译好的 LangGraph 工作流实例
+    """
+    global _workflow_instance
+    if _workflow_instance is None:
+        embedding_service = EmbeddingService()
+        llm_service = create_llm("dashscope")
+        _workflow_instance = create_workflow(embedding_service, llm_service)
+    return _workflow_instance
+
 
 router = APIRouter(prefix="/api/v1", tags=["api"])
 
@@ -66,13 +88,15 @@ class SendMessageResponse(BaseModel):
         session_id: 会话ID
         turn: 消息轮次
         ai_response: AI客户回复
-        evaluation: 评估结果
+        evaluation: 评估结果（含对话分析、语义覆盖、表达质量、改进建议）
+        guidance: 智能引导建议（覆盖率不足时生成）
     """
 
     session_id: str
     turn: int
     ai_response: str
     evaluation: dict[str, Any]
+    guidance: Optional[dict[str, Any]] = None
 
 
 class EvaluationResponse(BaseModel):
@@ -85,6 +109,8 @@ class EvaluationResponse(BaseModel):
         coverage_rate: 覆盖率
         overall_score: 综合评分
         expression_analysis: 表达能力分析
+        suggestions: 改进建议列表
+        conversation_analysis: 对话分析结果
     """
 
     session_id: str
@@ -93,6 +119,8 @@ class EvaluationResponse(BaseModel):
     coverage_rate: float
     overall_score: float
     expression_analysis: dict[str, int]
+    suggestions: list[dict[str, Any]] = []
+    conversation_analysis: Optional[dict[str, Any]] = None
 
 
 class SessionStatusResponse(BaseModel):
@@ -454,13 +482,18 @@ def _extract_keywords(text: str) -> list[str]:
 
 
 def _format_evaluation(
-    eval_result: EvaluationResult, coverage_labels: dict[str, str] | None = None
+    eval_result: EvaluationResult,
+    coverage_labels: dict[str, str] | None = None,
+    expression_result=None,
+    conversation_analysis=None,
 ) -> dict[str, Any]:
     """格式化评估结果为字典。
 
     Args:
         eval_result: 评估结果对象
         coverage_labels: 语义点ID到中文描述的映射（可选）
+        expression_result: ExpressionResult 对象（可选，用于提取 suggestions）
+        conversation_analysis: ConversationAnalysis 对象（可选）
 
     Returns:
         格式化的字典
@@ -478,7 +511,56 @@ def _format_evaluation(
     }
     if coverage_labels is not None:
         result["coverage_labels"] = coverage_labels
+
+    if expression_result is not None:
+        result["suggestions"] = [
+            {
+                "dimension": s.dimension,
+                "current_score": s.current_score,
+                "advice": s.advice,
+                "example": s.example,
+            }
+            for s in expression_result.suggestions
+        ]
+
+    if conversation_analysis is not None:
+        result["conversation_analysis"] = {
+            "stage": conversation_analysis.stage,
+            "intent": conversation_analysis.intent,
+            "objections": conversation_analysis.objections,
+            "sentiment": conversation_analysis.sentiment,
+            "confidence": conversation_analysis.confidence,
+        }
+
     return result
+
+
+def _format_guidance(guidance_result) -> Optional[dict[str, Any]]:
+    """格式化引导结果为字典。
+
+    Args:
+        guidance_result: GuidanceResult 对象
+
+    Returns:
+        格式化的字典，或 None（如果不需要引导）
+    """
+    if guidance_result is None or not guidance_result.is_actionable:
+        return None
+
+    return {
+        "summary": guidance_result.summary,
+        "is_actionable": guidance_result.is_actionable,
+        "priority_list": [
+            {
+                "gap": item.gap,
+                "urgency": item.urgency,
+                "suggestion": item.suggestion,
+                "talking_point": item.talking_point,
+                "expected_effect": item.expected_effect,
+            }
+            for item in guidance_result.priority_list
+        ],
+    }
 
 
 @router.post("/sessions", response_model=CreateSessionResponse, status_code=status.HTTP_201_CREATED)
@@ -597,16 +679,11 @@ def send_message(
         "current_message": request.content,
         "customer_profile": customer,
         "product_info": product,
-        "conversation_history": messages_for_workflow,
         "semantic_points": semantic_points,
-        "analysis_result": None,
-        "evaluation_result": None,
-        "guidance": None,
-        "ai_response": None,
-        "next_node": "",
+        "messages": messages_for_workflow,
     }
 
-    result = invoke(workflow_state)
+    result = _get_workflow().invoke(workflow_state)
 
     ai_response = result.get("ai_response", "抱歉，我现在无法回复。")
     evaluation = result.get("evaluation_result")
@@ -628,8 +705,12 @@ def send_message(
 
     coverage_labels = {sp.point_id: sp.description for sp in semantic_points}
 
+    expr_result = result.get("expression_result")
+    conv_analysis = result.get("conversation_analysis")
+    guide_result = result.get("guidance_result")
+
     eval_dict = (
-        _format_evaluation(evaluation, coverage_labels)
+        _format_evaluation(evaluation, coverage_labels, expr_result, conv_analysis)
         if evaluation
         else {
             "coverage_status": {},
@@ -637,14 +718,18 @@ def send_message(
             "coverage_rate": 0.0,
             "overall_score": 0.0,
             "expression_analysis": {"clarity": 0, "professionalism": 0, "persuasiveness": 0},
+            "suggestions": [],
         }
     )
+
+    guidance_dict = _format_guidance(guide_result)
 
     return SendMessageResponse(
         session_id=session_id,
         turn=turn,
         ai_response=ai_response or "",
         evaluation=eval_dict,
+        guidance=guidance_dict,
     )
 
 
@@ -717,7 +802,7 @@ def get_evaluation(session_id: str) -> EvaluationResponse:
         "next_node": "",
     }
 
-    result = invoke(workflow_state)
+    result = _get_workflow().invoke(workflow_state)
     evaluation = result.get("evaluation_result")
 
     if not evaluation:

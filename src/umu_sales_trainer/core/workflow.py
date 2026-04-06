@@ -1,558 +1,549 @@
-"""LangGraph StateGraph 工作流模块。
+"""Agentic RAG 工作流模块。
 
-实现AI销售训练Chatbot的核心工作流，使用Pipeline模式+条件分支架构。
-包含6个节点和条件边路由。
+基于 LangGraph StateGraph 实现多 Agent 协作的销售训练评估流水线。
+8 个节点，每个节点对应一个明确的 Agent 或数据处理步骤：
+
+    start → conversation_analyze → semantic_eval → expression_eval
+      → synthesize → [guidance] → simulate → end
+
+各节点与 Agent 的映射关系：
+- conversation_analyze: ConversationAnalyst（对话分析师）
+- semantic_eval: SemanticCoverageExpert（语义覆盖专家）
+- expression_eval: ExpressionCoach（表达教练）
+- guidance: GuidanceMentor（引导导师）
+- simulate: CustomerSimulator（客户模拟器，保持不变）
 """
 
 from __future__ import annotations
 
 import logging
-import random
-from typing import TYPE_CHECKING, Literal, Optional, TypedDict
+from typing import Any, Optional
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 
-if TYPE_CHECKING:
-    from langgraph.graph.state import CompiledStateGraph
-
-from umu_sales_trainer.core.evaluator import SemanticEvaluator
+from umu_sales_trainer.core.analyzer import (
+    ConversationAnalyst,
+    ConversationAnalysis,
+)
+from umu_sales_trainer.core.evaluator import (
+    CoverageResult,
+    ExpressionCoach,
+    ExpressionResult,
+    SemanticCoverageExpert,
+    calculate_overall_score,
+)
+from umu_sales_trainer.core.guidance import GuidanceMentor, GuidanceResult
 from umu_sales_trainer.models.conversation import Message
 from umu_sales_trainer.models.customer import CustomerProfile
-from umu_sales_trainer.models.evaluation import EvaluationResult
+from umu_sales_trainer.models.evaluation import EvaluationResult, ExpressionAnalysis
 from umu_sales_trainer.models.product import ProductInfo
 from umu_sales_trainer.models.semantic import SemanticPoint
 from umu_sales_trainer.services.embedding import EmbeddingService
-from umu_sales_trainer.services.llm import create_llm
+from umu_sales_trainer.services.llm import LLMService, create_llm
 
 logger = logging.getLogger(__name__)
 
 
-class WorkflowState(TypedDict):
-    """工作流状态。
+class WorkflowState(dict):
+    """工作流状态字典。
 
-    存储整个工作流执行过程中的所有状态数据，在节点间传递。
+    贯穿所有节点的共享状态，包含输入、中间结果和最终输出。
 
     Attributes:
         session_id: 会话唯一标识
-        sales_message: 销售人员的发言内容
-        customer_profile: 客户画像信息
+        sales_message: 销售人员最新发言（单条）
+        current_message: 当前轮次消息（同 sales_message，用于兼容）
+        customer_profile: 客户画像
         product_info: 产品信息
-        conversation_history: 对话历史消息列表
-        semantic_points: 语义点列表（评估标准）
-        analysis_result: 分析结果（可选）
-        evaluation_result: 评估结果（可选）
-        guidance: 引导内容（可选）
-        ai_response: AI客户回复（可选）
-        next_node: 下一个节点名称（用于条件路由）
+        semantic_points: 语义点列表
+        messages: 对话历史消息列表
+        evaluation_result: 最终聚合的评估结果
+        coverage_result: 语义覆盖检测结果（中间态）
+        expression_result: 表达能力评估结果（中间态）
+        conversation_analysis: 对话分析结果（中间态）
+        guidance_result: 智能引导结果（中间态）
+        ai_response: AI 生成的客户回复
+        error: 错误信息
     """
 
-    session_id: str
-    sales_message: str
-    customer_profile: CustomerProfile
-    product_info: ProductInfo
-    conversation_history: list[Message]
-    semantic_points: list[SemanticPoint]
-    analysis_result: Optional[dict]
-    evaluation_result: Optional[EvaluationResult]
-    guidance: Optional[str]
-    ai_response: Optional[str]
-    next_node: str
+    session_id: str = ""
+    sales_message: str = ""
+    current_message: str = ""
+    customer_profile: Optional[CustomerProfile] = None
+    product_info: Optional[ProductInfo] = None
+    semantic_points: list[SemanticPoint] = []
+    messages: list[Message] = []
+    evaluation_result: Optional[EvaluationResult] = None
+    coverage_result: Optional[CoverageResult] = None
+    expression_result: Optional[ExpressionResult] = None
+    conversation_analysis: Optional[ConversationAnalysis] = None
+    guidance_result: Optional[GuidanceResult] = None
+    ai_response: str = ""
+    error: str = ""
 
 
-def create_workflow() -> "CompiledStateGraph":
-    """工厂方法：创建并编译工作流图。
+def create_workflow(
+    embedding_service: EmbeddingService,
+    llm_service: LLMService,
+) -> StateGraph:
+    """创建 Agentic RAG 工作流图。
 
-    构建包含6个节点和条件边路由的StateGraph，并返回编译后的图实例。
+    初始化 4 个 Agent 并构建 8 节点有向图。
+
+    Args:
+        embedding_service: 向量嵌入服务实例
+        llm_service: LLM 服务实例
 
     Returns:
-        编译后的 StateGraph 实例，可通过 invoke() 方法执行
+        编译好的 StateGraph 工作流
     """
-    workflow = StateGraph(WorkflowState)
+    conversation_analyst = ConversationAnalyst(llm_service)
+    semantic_expert = SemanticCoverageExpert(embedding_service, llm_service)
+    expression_coach = ExpressionCoach(llm_service)
+    guidance_mentor = GuidanceMentor(llm_service)
 
-    workflow.add_node("start", _node_start)
-    workflow.add_node("analyze", _node_analyze)
-    workflow.add_node("evaluate", _node_evaluate)
-    workflow.add_node("guidance", _node_guidance)
-    workflow.add_node("simulate", _node_simulate)
-    workflow.add_node("end", _node_end)
+    graph = StateGraph(WorkflowState)
 
-    workflow.set_entry_point("start")
+    graph.add_node("start", _node_start)
+    graph.add_node("conversation_analyze", _make_node_conversation_analyze(conversation_analyst))
+    graph.add_node("semantic_eval", _make_node_semantic_eval(semantic_expert))
+    graph.add_node("expression_eval", _make_node_expression_eval(expression_coach))
+    graph.add_node("synthesize", _node_synthesize)
+    graph.add_node("guidance", _make_node_guidance(guidance_mentor))
+    graph.add_node("simulate", _node_simulate)
+    graph.add_node("end", _node_end)
 
-    workflow.add_conditional_edges(
-        "start",
-        _route_from_start,
-        {
-            "analyze": "analyze",
-            "end": "end",
-        },
+    graph.set_entry_point("start")
+    graph.add_edge("start", "conversation_analyze")
+    graph.add_edge("conversation_analyze", "semantic_eval")
+    graph.add_edge("semantic_eval", "expression_eval")
+    graph.add_edge("expression_eval", "synthesize")
+    graph.add_conditional_edges(
+        "synthesize",
+        _should_generate_guidance,
+        {"yes": "guidance", "no": "simulate"},
     )
+    graph.add_edge("guidance", "simulate")
+    graph.add_edge("simulate", "end")
+    graph.add_edge("end", END)
 
-    workflow.add_edge("analyze", "evaluate")
-
-    workflow.add_conditional_edges(
-        "evaluate",
-        _route_from_evaluate,
-        {
-            "guidance": "guidance",
-            "simulate": "simulate",
-        },
-    )
-
-    workflow.add_edge("guidance", "simulate")
-    workflow.add_edge("simulate", "end")
-    workflow.add_edge("end", END)
-
-    return workflow.compile()
+    return graph.compile()
 
 
-def _validate_input(state: WorkflowState) -> bool:
-    """验证输入状态是否有效。
+def _node_start(state: WorkflowState) -> dict[str, Any]:
+    """起始节点：验证和初始化输入。
+
+    确保必要字段存在并做基础校验。
+
+    Args:
+        state: 当前工作流状态
+
+    Returns:
+        更新的状态片段
+    """
+    logger.info("[start] Initializing workflow for session %s", state.get("session_id", "?"))
+
+    if not state.get("sales_message"):
+        return {"error": "No sales message provided"}
+
+    if not state.get("semantic_points"):
+        logger.warning("[start] No semantic points provided")
+
+    return {}
+
+
+def _make_node_conversation_analyze(analyst: ConversationAnalyst):
+    """创建对话分析节点的工厂函数。
+
+    Args:
+        analyst: ConversationAnalyst 实例
+
+    Returns:
+        节点函数
+    """
+
+    def _node(state: WorkflowState) -> dict[str, Any]:
+        """对话分析节点：调用 ConversationAnalyst 分析销售发言。
+
+        识别销售阶段、意图、异议信号和情感倾向。
+
+        Args:
+            state: 工作流状态
+
+        Returns:
+            包含 conversation_analysis 的状态更新
+        """
+        logger.info("[conversation_analyze] Analyzing message intent and stage")
+
+        analysis = analyst.analyze(
+            sales_message=state["sales_message"],
+            customer_profile=state.get("customer_profile"),
+            conversation_history=state.get("messages"),
+        )
+
+        logger.info(
+            "[conversation_analyze] stage=%s, intent=%s, objections=%s",
+            analysis.stage,
+            analysis.intent,
+            analysis.objections,
+        )
+
+        return {"conversation_analysis": analysis}
+
+    return _node
+
+
+def _make_node_semantic_eval(expert: SemanticCoverageExpert):
+    """创建语义评估节点的工厂函数。
+
+    Args:
+        expert: SemanticCoverageExpert 实例
+
+    Returns:
+        节点函数
+    """
+
+    def _node(state: WorkflowState) -> dict[str, Any]:
+        """语义评估节点：调用 SemanticCoverageExpert 检测语义点覆盖。
+
+        执行三层检测（关键词+Embedding+LLM）判断每个语义点的覆盖情况。
+
+        Args:
+            state: 工作流状态
+
+        Returns:
+            包含 coverage_result 的状态更新
+        """
+        logger.info("[semantic_eval] Evaluating semantic point coverage")
+
+        result = expert.evaluate_coverage(
+            sales_message=state["sales_message"],
+            semantic_points=state.get("semantic_points", []),
+            context={"session_id": state.get("session_id")},
+        )
+
+        logger.info(
+            "[semantic_eval] rate=%.2f, uncovered=%s",
+            result.coverage_rate,
+            result.uncovered_points,
+        )
+
+        return {"coverage_result": result}
+
+    return _node
+
+
+def _make_node_expression_eval(coach: ExpressionCoach):
+    """创建表达评估节点的工厂函数。
+
+    Args:
+        coach: ExpressionCoach 实例
+
+    Returns:
+        节点函数
+    """
+
+    def _node(state: WorkflowState) -> dict[str, Any]:
+        """表达评估节点：调用 ExpressionCoach 评估表达能力。
+
+        三维度评分（清晰度/专业性/说服力）+ 改进建议生成。
+
+        Args:
+            state: 工作流状态
+
+        Returns:
+            包含 expression_result 的状态更新
+        """
+        logger.info("[expression_eval] Evaluating expression quality")
+
+        result = coach.evaluate(
+            message=state["sales_message"],
+            context={
+                "session_id": state.get("session_id"),
+                "customer_position": (state.get("customer_profile") or CustomerProfile()).position,
+            },
+        )
+
+        expr = result.analysis
+        logger.info(
+            "[expression_eval] clarity=%d, pro=%d, pers=%d, suggestions=%d",
+            expr.clarity,
+            expr.professionalism,
+            expr.persuasiveness,
+            len(result.suggestions),
+        )
+
+        return {"expression_result": result}
+
+    return _node
+
+
+def _node_synthesize(state: WorkflowState) -> dict[str, Any]:
+    """综合节点：合并三个 Agent 的结果为统一 EvaluationResult。
+
+    将 coverage_result、expression_result 和 conversation_analysis
+    聚合为前端可用的统一评估对象。
 
     Args:
         state: 工作流状态
 
     Returns:
-        输入是否有效
+        包含 evaluation_result 的状态更新
     """
-    return bool(
-        state.get("session_id")
-        and state.get("sales_message")
-        and state.get("customer_profile")
-        and state.get("product_info")
+    logger.info("[synthesize] Merging agent results into unified EvaluationResult")
+
+    coverage = state.get("coverage_result") or CoverageResult()
+    expression = state.get("expression_result") or ExpressionResult()
+
+    overall = calculate_overall_score(coverage, expression)
+
+    eval_result = EvaluationResult(
+        session_id=state.get("session_id", ""),
+        coverage_status=coverage.coverage_status,
+        coverage_rate=coverage.coverage_rate,
+        overall_score=overall,
+        expression_analysis=expression.analysis,
     )
 
+    logger.info(
+        "[synthesize] overall=%.2f, coverage_rate=%.2f",
+        overall,
+        coverage.coverage_rate,
+    )
 
-def _node_start(state: WorkflowState) -> WorkflowState:
-    """入口节点：验证输入。
-
-    检查输入状态的有效性，如果无效则直接结束工作流。
-    有效则将控制权传递给 analyze 节点。
-
-    Args:
-        state: 当前工作流状态
-
-    Returns:
-        更新后的工作流状态
-    """
-    if _validate_input(state):
-        state["next_node"] = "analyze"
-    else:
-        state["next_node"] = "end"
-    return state
+    return {"evaluation_result": eval_result}
 
 
-def _node_analyze(state: WorkflowState) -> WorkflowState:
-    """分析节点：分析销售发言。
+def _should_generate_guidance(state: WorkflowState) -> str:
+    """条件路由：判断是否需要生成引导建议。
 
-    对销售人员的发言进行分析，提取关键信息和上下文。
-    这里为简化实现，直接设置 analysis_result。
+    当覆盖率低于 80% 时走 guidance 节点，
+    否则直接跳到 simulate 节点。
 
     Args:
-        state: 当前工作流状态
+        state: 工作流状态
 
     Returns:
-        更新后的工作流状态，包含分析结果
+        "yes" 或 "no"
     """
-    sales_msg = state.get("sales_message", "")
-    customer = state.get("customer_profile", CustomerProfile("", ""))
-    state["analysis_result"] = {
-        "message_length": len(sales_msg),
-        "customer_industry": customer.industry,
-        "contains_objection": any(
-            keyword in sales_msg for keyword in ["贵", "价格", "不需要", "考虑", "比较"]
-        ),
-        "analyzed": True,
-    }
-    state["next_node"] = "evaluate"
-    return state
+    coverage = state.get("coverage_result")
+    if coverage and coverage.coverage_rate < 0.8:
+        return "yes"
+    return "no"
 
 
-def _node_evaluate(state: WorkflowState) -> WorkflowState:
-    """评估节点：使用三层检测机制评估语义点覆盖。
-
-    调用 SemanticEvaluator 执行完整的三层语义检测：
-    - 第一层：关键词匹配（权重 0.2）
-    - 第二层：Embedding 相似度（权重 0.3）
-    - 第三层：LLM 深度判断（权重 0.5）
-    同时进行表达能力分析（AgenticRAG）。
+def _make_node_guidance(mentor: GuidanceMentor):
+    """创建引导节点的工厂函数。
 
     Args:
-        state: 当前工作流状态
+        mentor: GuidanceMentor 实例
 
     Returns:
-        更新后的工作流状态，包含完整评估结果
+        节点函数
     """
-    semantic_points = state.get("semantic_points", [])
-    sales_message = state.get("sales_message", "")
-    session_id = state.get("session_id", "unknown")
 
-    if not semantic_points or not sales_message:
-        logger.warning("Missing semantic_points or sales_message, using default evaluation")
-        coverage_status = {sp.point_id: "covered" for sp in semantic_points}
-        state["evaluation_result"] = EvaluationResult(
-            session_id=session_id,
-            coverage_status=coverage_status,
-            coverage_rate=1.0 if coverage_status else 0.0,
-            overall_score=100.0 if coverage_status else 0.0,
+    def _node(state: WorkflowState) -> dict[str, Any]:
+        """引导节点：调用 GuidanceMentor 生成结构化引导建议。
+
+        综合三个 Agent 结果，按紧急度排序改进项。
+
+        Args:
+            state: 工作流状态
+
+        Returns:
+            包含 guidance_result 的状态更新
+        """
+        logger.info("[guidance] Generating structured guidance")
+
+        result = mentor.generate_guidance(
+            coverage_result=state.get("coverage_result") or CoverageResult(),
+            expression_result=state.get("expression_result") or ExpressionResult(),
+            conversation_analysis=state.get("conversation_analysis"),
+            semantic_points=state.get("semantic_points", []),
+            customer_profile=state.get("customer_profile"),
         )
-        state["next_node"] = "simulate"
-        return state
-
-    try:
-        embedding_service = EmbeddingService()
-        llm_service = create_llm("dashscope")
-        evaluator = SemanticEvaluator(embedding_service, llm_service)
-
-        context = {"session_id": session_id}
-        evaluation = evaluator.evaluate(sales_message, semantic_points, context)
 
         logger.info(
-            "Evaluation completed: coverage_rate=%.2f, overall_score=%.1f, "
-            "expression=(clarity=%d, pro=%d, pers=%d)",
-            evaluation.coverage_rate,
-            evaluation.overall_score,
-            evaluation.expression_analysis.clarity,
-            evaluation.expression_analysis.professionalism,
-            evaluation.expression_analysis.persuasiveness,
+            "[guidance] actionable=%s, items=%d",
+            result.is_actionable,
+            len(result.priority_list),
         )
 
-        state["evaluation_result"] = evaluation
-    except Exception as e:
-        logger.error("SemanticEvaluator failed, using fallback: %s", e)
-        coverage_status = {sp.point_id: "covered" for sp in semantic_points}
-        state["evaluation_result"] = EvaluationResult(
-            session_id=session_id,
-            coverage_status=coverage_status,
-            coverage_rate=1.0,
-            overall_score=100.0,
-        )
+        return {"guidance_result": result}
 
-    evaluation = state["evaluation_result"]
-    state["next_node"] = "guidance" if evaluation.coverage_rate < 0.8 else "simulate"
-    return state
+    return _node
 
 
-def _node_guidance(state: WorkflowState) -> WorkflowState:
-    """引导节点：生成销售引导。
+def _node_simulate(state: WorkflowState) -> dict[str, Any]:
+    """客户模拟节点：生成 AI 客户回复。
 
-    当语义点覆盖不足时，生成针对性的销售引导建议。
-    帮助销售人员更好地覆盖关键语义点。
+    基于客户画像、产品信息和完整评估结果，
+    使用 LLM 生成符合角色设定的客户回复。
 
     Args:
-        state: 当前工作流状态
+        state: 工作流状态
 
     Returns:
-        更新后的工作流状态，包含引导内容
+        包含 ai_response 的状态更新
     """
-    evaluation = state.get("evaluation_result")
-    uncovered = (
-        [pid for pid, status in evaluation.coverage_status.items() if status != "covered"]
-        if evaluation
-        else []
-    )
+    logger.info("[simulate] Generating AI customer response")
 
-    state["guidance"] = (
-        f"建议加强以下语义点的覆盖：{', '.join(uncovered)}"
-        if uncovered
-        else "当前表达已覆盖主要语义点。"
-    )
-    state["next_node"] = "simulate"
-    return state
-
-
-def _node_simulate(state: WorkflowState) -> WorkflowState:
-    """模拟节点：生成AI客户回复。
-
-    根据当前对话上下文，调用LLM或使用规则引擎生成AI客户角色的回复。
-    优先使用真实LLM，失败时回退到智能规则回复。
-
-    Args:
-        state: 当前工作流状态
-
-    Returns:
-        更新后的工作流状态，包含AI客户回复
-    """
-    customer = state.get("customer_profile", CustomerProfile("", ""))
-    sales_msg = state.get("sales_message", "")
-    history = state.get("conversation_history", [])
-
-    ai_response = _generate_ai_response(customer, sales_msg, history)
-
-    state["ai_response"] = ai_response
-    state["next_node"] = "end"
-    return state
-
-
-def _generate_ai_response(
-    customer: CustomerProfile,
-    sales_msg: str,
-    history: list[Message],
-) -> str:
-    """生成AI客户回复。
-
-    尝试调用LLM服务生成动态回复，如果失败则使用基于规则的智能回复。
-
-    Args:
-        customer: 客户画像
-        sales_msg: 销售人员最新消息
-        history: 对话历史
-
-    Returns:
-        AI客户回复文本
-    """
-    # 尝试使用LLM
-    llm_response = _try_llm_generation(customer, sales_msg, history)
-    if llm_response:
-        return llm_response
-
-    # 回退到规则引擎
-    logger.info("LLM generation failed, falling back to rule-based response")
-    return _generate_rule_based_response(customer, sales_msg, history)
-
-
-def _try_llm_generation(
-    customer: CustomerProfile,
-    sales_msg: str,
-    history: list[Message],
-) -> Optional[str]:
-    """尝试调用LLM生成回复。
-
-    Returns:
-        LLM生成的回复字符串，如果失败返回None
-    """
     try:
-        from umu_sales_trainer.services.llm import LLMServicesError, create_llm
-        from langchain_core.messages import AIMessage
-
         llm = create_llm("dashscope")
+        response_text = _generate_ai_response(state, llm)
 
-        customer_name = getattr(customer, "name", None) or customer.position
-        customer_hospital = getattr(customer, "hospital", "") or "某医院"
+        if not response_text or len(response_text) < 5:
+            response_text = _generate_fallback_response(state)
 
-        system_prompt = f"""【角色设定】
-你正在扮演 **{customer_name}**（{customer.position}，就职于{customer_hospital}）。
-你是客户（医生/采购方），坐在你对面的是一位**医药销售代表**。
+        return {"ai_response": response_text}
+
+    except Exception as e:
+        logger.error("[simulate] Failed to generate AI response: %s", e)
+        return {
+            "ai_response": _generate_fallback_response(state),
+            "error": f"AI generation failed: {e}",
+        }
+
+
+def _generate_ai_response(state: WorkflowState, llm: LLMService) -> str:
+    """使用 LLM 生成 AI 客户回复。
+
+    构建完整的 System Prompt 和历史消息上下文，
+    让 AI 以客户身份进行角色扮演式回复。
+
+    Args:
+        state: 工作流状态
+        llm: LLM 服务实例
+
+    Returns:
+        AI 生成的客户回复文本
+    """
+    customer = state.get("customer_profile") or CustomerProfile()
+    product = state.get("product_info") or ProductInfo()
+    messages = state.get("messages", [])
+    sales_msg = state.get("sales_message", "")
+    conv_analysis = state.get("conversation_analysis")
+    eval_result = state.get("evaluation_result")
+
+    customer_name = customer.name or "医生"
+    customer_hospital = customer.hospital or "某医院"
+    customer_position = customer.position or "科室主任"
+
+    system_prompt = _build_customer_system_prompt(customer_name, customer_hospital, customer_position, customer, product)
+
+    langchain_messages: list[Any] = [SystemMessage(content=system_prompt)]
+
+    for msg in messages[-6:]:
+        if msg.role == "user":
+            langchain_messages.append(HumanMessage(content=f"[销售代表]: {msg.content}"))
+        elif msg.role == "assistant":
+            langchain_messages.append(AIMessage(content=msg.content))
+
+    if sales_msg:
+        context_suffix = ""
+        if conv_analysis:
+            stage_label = conv_analysis.stage.replace("_", "-")
+            context_suffix += f"\n（当前销售处于{stage_label}阶段）"
+        if eval_result:
+            context_suffix += f"\n（您的表现评分：{eval_result.overall_score:.0f}/100分）"
+        langchain_messages.append(HumanMessage(content=f"[销售代表]: {sales_msg}{context_suffix}"))
+
+    response = llm.invoke(langchain_messages)
+    return response.content.strip() if hasattr(response, 'content') else str(response)
+
+
+def _build_customer_system_prompt(
+    name: str,
+    hospital: str,
+    position: str,
+    customer: CustomerProfile,
+    product: ProductInfo,
+) -> str:
+    """构建客户角色扮演的系统提示词。
+
+    明确定义 AI 应该扮演的角色、性格特征和对话规则，
+    避免角色混淆问题。
+
+    Args:
+        name: 客户姓名
+        hospital: 客户机构
+        position: 客户职位
+        customer: 完整客户画像
+        product: 产品信息
+
+    Returns:
+        格式化的系统提示词
+    """
+    concerns_text = ", ".join(customer.concerns[:3]) if customer.concerns else "疗效、安全性、价格"
+    personality_text = customer.personality or "专业审慎，注重数据和循证医学证据"
+
+    return f"""【角色设定】
+你正在扮演 **{name}**（{position}，就职于{hospital}）。
+你是**客户**（医生/采购方），坐在你对面的是一位**医药销售代表**。
 
 【你的画像】
-- 姓名：{customer_name}
-- 职位：{customer.position}
-- 机构：{customer_hospital}
-- 性格：{customer.personality or '专业审慎'}
-- 核心关注点：{", ".join(customer.concerns[:3]) if customer.concerns else '疗效、安全性、价格'}
+- 姓名：{name}
+- 职位：{position}
+- 机构：{hospital}
+- 性格：{personality_text}
+- 核心关注点：{concerns_text}
+- 产品认知度：对「{product.name or '该产品'}」有一定了解但持谨慎态度
 
 【对话规则】
 1. 你是**客户**，对方是**销售代表**。不要混淆角色。
-2. 以"{customer_name}"或"我"自称，称呼对方为"您"或"你们"。
-3. 回应要符合{customer.position}的专业身份和性格特点。
-4. 自然地提出专业问题或表达关切（围绕关注点展开）。
-5. 回应长度控制在50-150字之间。
-6. 使用中文回答。"""
-
-        messages = [SystemMessage(content=system_prompt)]
-
-        for msg in history[-6:]:
-            if msg.role == "user":
-                messages.append(
-                    HumanMessage(content=f"[销售代表]: {msg.content}")
-                )
-            elif msg.role == "assistant":
-                messages.append(AIMessage(content=msg.content))
-
-        if sales_msg:
-            messages.append(
-                HumanMessage(content=f"[销售代表]: {sales_msg}")
-            )
-
-        # 调用LLM
-        response = llm.invoke(messages)
-        ai_text = response.content.strip()
-
-        if ai_text and len(ai_text) > 5:
-            logger.info(f"LLM generated response: {ai_text[:50]}...")
-            return ai_text
-
-    except (ImportError, LLMServicesError) as e:
-        logger.warning(f"LLM service unavailable: {e}")
-    except Exception as e:
-        logger.error(f"LLM generation error: {e}")
-
-    return None
+2. 以"{name}"或"我"自称，称呼对方为"您"或"你们"。
+3. 回复长度控制在50-150字之间，像真实对话一样自然。
+4. 根据你的性格特点回应：
+   - 如果对方提到数据，你会追问来源和样本量
+   - 如果对方只说优点，你会主动询问副作用或局限性
+   - 如果对方说得太笼统，你会要求具体说明
+5. 可以适当提出反对意见或顾虑（这是真实的销售场景）。
+6. 不要总是同意对方——真实的客户会有疑虑。"""
 
 
-def _generate_rule_based_response(
-    customer: CustomerProfile,
-    sales_msg: str,
-    history: list[Message],
-) -> str:
-    """基于规则生成智能回复。
+def _generate_fallback_response(state: WorkflowState) -> str:
+    """降级方案：当 LLM 不可用时生成默认回复。
 
-    当LLM不可用时，根据对话上下文和客户画像生成多样化的回复。
-    通过分析用户输入关键词和历史轮次来决定回复策略。
+    根据对话分析的阶段信息选择合适的模板回复。
 
     Args:
-        customer: 客户画像
-        sales_msg: 销售人员消息
-        history: 对话历史
+        state: 工作流状态
 
     Returns:
-        规则生成的回复文本
+        默认回复文本
     """
-    turn_count = len([m for m in history if m.role == "user"])
+    customer = state.get("customer_profile") or CustomerProfile()
+    name = customer.name or "张主任"
+    conv = state.get("conversation_analysis")
 
-    # 定义不同阶段的回复模板库
-    opening_responses = [
-        f"您好，我是{customer.position}。听说您有一款新产品要介绍？请说说看。",
-        "你好，欢迎来访。我这边时间有限，请直接说明您的来意吧。",
-        "您好。我们科室最近在评估新的治疗方案，如果您有好的产品，可以简单介绍一下。",
-    ]
+    stage_responses = {
+        "opening": f"{name}：您好，请简要介绍一下您今天想聊什么？我时间比较紧。",
+        "needs_discovery": f"{name}：嗯，我想了解更多细节。您能具体说说这个产品的优势在哪里吗？",
+        "presentation": f"{name}：听起来不错，但我需要看到更多的临床数据支撑。有没有头对头的研究？",
+        "objection_handling": f"{name}：我理解您的说法，但这一点我还是有些顾虑...",
+        "closing": f"{name}：好的，让我再考虑一下。您可以先发一份详细资料给我。",
+    }
 
-    interest_responses = [
-        f"嗯，听起来不错。作为{customer.position}，我比较关心产品的{customer.concerns[0] if customer.concerns else '临床数据'}，这方面能详细说说吗？",
-        f"有点意思。不过我们医院对这类产品要求比较严格，特别是{customer.concerns[0] if customer.concerns else '安全性'}方面，你们做得怎么样？",
-        f"了解了基本情况。我想知道这款产品相比市面上其他方案有什么优势？特别是在{customer.concerns[0] if len(customer.concerns) > 0 else '疗效'}方面。",
-    ]
+    stage = conv.stage if conv else "opening"
+    return stage_responses.get(stage, f"{name}：我明白了，请继续。")
 
-    objection_responses = [
-        "这个价格确实需要考虑一下。您知道我们科室的预算情况，能不能申请一些优惠或者分期方案？",
-        f"证据方面，除了厂商提供的数据，有没有第三方临床试验的结果？作为{customer.position}，我需要看到更权威的数据支撑。",
-        "我理解您的观点，但我们这里之前用过类似的产品，效果并不理想。您能保证这次会有所不同吗？",
-    ]
 
-    follow_up_responses = [
-        "好的，我记下了。还有其他方面的信息吗？比如用药方案、副作用这些我也比较关注。",
-        "明白了。那如果我们在临床上遇到一些特殊情况，比如患者依从性不好，你们有什么支持措施吗？",
-        "嗯...让我想想。其实我还想了解一下，这款产品的医保覆盖情况怎么样？这对我们推广很重要。",
-    ]
+def _node_end(state: WorkflowState) -> dict[str, Any]:
+    """结束节点：清理和日志记录。
 
-    closing_responses = [
-        "好的，今天的信息量不少，我需要时间消化一下。您可以把产品资料留下吗？我会和团队讨论后再联系您。",
-        "感谢您的介绍。整体来说印象还不错，但我还需要再对比一下其他方案。我们可以保持联系。",
-        "今天先聊到这里吧。如果后续有新的临床数据或者优惠政策，欢迎随时告诉我。",
-    ]
+    记录最终状态摘要用于调试追踪。
 
-    # 分析用户消息关键词
-    msg_lower = sales_msg.lower() if sales_msg else ""
+    Args:
+        state: 工作流状态
 
-    # 判断回复阶段和类型
-    if turn_count <= 1:
-        # 开场阶段
-        if not sales_msg or sales_msg in ["请开始对话", ""]:
-            return random.choice(opening_responses)
-        return random.choice(interest_responses)
-
-    # 检测关键词决定回复策略
-    has_price_keyword = any(kw in msg_lower for kw in ["价格", "贵", "便宜", "预算", "成本"])
-    has_evidence_keyword = any(
-        kw in msg_lower for kw in ["证据", "研究", "试验", "数据", "文献", "论文"]
+    Returns:
+        空状态更新（无修改）
+    """
+    logger.info(
+        "[end] Workflow complete - session=%s, score=%.2f, ai_len=%d",
+        state.get("session_id"),
+        (state.get("evaluation_result") or EvaluationResult()).overall_score,
+        len(state.get("ai_response", "")),
     )
-    has_safety_keyword = any(kw in msg_lower for kw in ["安全", "副作用", "不良反应", "耐受"])
-    has_efficacy_keyword = any(kw in msg_lower for kw in ["效果", "疗效", "控制率", "降低", "改善"])
-
-    if has_price_keyword or any(kw in msg_lower for kw in customer.objection_tendencies):
-        return random.choice(objection_responses)
-
-    if has_safety_keyword or has_evidence_keyword:
-        return random.choice(
-            [
-                f"{customer.concerns[0] if customer.concerns else '安全性'}确实是我们最关注的。您提到的这一点很重要，能展开说说具体数据吗？",
-                f"关于{'安全性' if has_safety_keyword else '证据支持'}，我想了解更多细节。有没有相关的头对头研究结果？",
-                f"这点很关键。在我们科，{'安全性' if has_safety_keyword else '证据充分性'}是首要考虑因素。",
-            ]
-        )
-
-    if has_efficacy_keyword:
-        return random.choice(
-            [
-                "疗效数据看起来不错。但实际临床应用中，患者的依从性怎么样？这点我很关心。",
-                "降糖效果是基础，但我们更看重长期的安全性 profile。这方面的数据呢？",
-                "控制率数据令人印象深刻。不过我想知道，对于特殊人群比如老年人，效果如何？",
-            ]
-        )
-
-    # 根据轮次选择回复
-    if turn_count >= 5:
-        return random.choice(closing_responses)
-    elif turn_count >= 3:
-        return random.choice(follow_up_responses)
-    else:
-        # 中间轮次，混合使用兴趣和追问
-        all_mid = interest_responses + follow_up_responses
-        return random.choice(all_mid)
-
-
-def _node_end(state: WorkflowState) -> WorkflowState:
-    """结束节点：处理结束逻辑。
-
-    执行工作流结束时的清理和收尾工作。
-
-    Args:
-        state: 当前工作流状态
-
-    Returns:
-        最终工作流状态
-    """
-    state["next_node"] = END
-    return state
-
-
-def _route_from_start(state: WorkflowState) -> Literal["analyze", "end"]:
-    """从 start 节点的条件路由。
-
-    根据验证结果决定下一步路由。
-
-    Args:
-        state: 当前工作流状态
-
-    Returns:
-        下一节点名称
-    """
-    return "analyze" if state.get("next_node") == "analyze" else "end"
-
-
-def _route_from_evaluate(state: WorkflowState) -> Literal["guidance", "simulate"]:
-    """从 evaluate 节点的条件路由。
-
-    根据评估结果决定是否需要引导或直接进入模拟。
-
-    Args:
-        state: 当前工作流状态
-
-    Returns:
-        下一节点名称
-    """
-    next_node = state.get("next_node", "simulate")
-    if next_node in ("guidance", "simulate"):
-        return next_node
-    return "simulate"
-
-
-_workflow_instance: Optional["CompiledStateGraph"] = None
-
-
-def get_workflow() -> "CompiledStateGraph":
-    """获取工作流单例实例。
-
-    Returns:
-        编译后的 StateGraph 实例
-    """
-    global _workflow_instance
-    if _workflow_instance is None:
-        _workflow_instance = create_workflow()
-    return _workflow_instance
-
-
-def invoke(state: WorkflowState) -> WorkflowState:
-    """执行工作流。
-
-    接收初始状态，执行完整的工作流流程，返回最终状态。
-
-    Args:
-        state: 初始工作流状态
-
-    Returns:
-        最终工作流状态
-    """
-    workflow = get_workflow()
-    result = workflow.invoke(state)
-    return dict(result)
+    return {}

@@ -1,335 +1,342 @@
-"""引导生成器模块。
+"""智能引导模块。
 
-根据未覆盖的语义点生成智能销售引导话术，帮助销售完善信息传递。
-支持多种引导策略：直接提问、质疑挑战、澄清请求、补充引导。
-结合 RAG 知识库检索生成更精准的引导。
+实现 GuidanceMentor（引导导师）Agent，综合语义覆盖、表达质量和对话分析结果，
+生成结构化、可操作的销售培训引导建议。
+
+这是 Agentic RAG 工作流中唯一面向用户输出的 Agent，
+其产出直接渲染为前端「智能引导」面板。
 """
 
 from __future__ import annotations
 
-import random
-from typing import TYPE_CHECKING, Any, Literal
+import json
+import logging
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 
 from umu_sales_trainer.services.llm import LLMService
 
 if TYPE_CHECKING:
-    from umu_sales_trainer.core.hybrid_search import HybridSearchEngine
+    from umu_sales_trainer.core.analyzer import ConversationAnalysis
+    from umu_sales_trainer.core.evaluator import CoverageResult, ExpressionResult
+    from umu_sales_trainer.models.customer import CustomerProfile
+    from umu_sales_trainer.models.semantic import SemanticPoint
+
+logger = logging.getLogger(__name__)
 
 
-class GuidanceGenerator:
-    """引导生成器。
-
-    根据未覆盖的语义点列表和销售对话上下文，智能生成引导话术。
-    引导策略包括：直接提问、质疑挑战、澄清请求、补充引导。
-    支持结合 RAG 知识库检索生成更精准的个性化引导。
-
-    Attributes:
-        llm: LLM 服务实例，用于生成自然语言引导
-        rag_retriever: 可选的 RAG 检索器，用于增强引导的准确性
-
-    Example:
-        >>> generator = GuidanceGenerator(llm_service)
-        >>> context = {"product_name": "某药品", "customer_need": "降压"}
-        >>> points = [{"point_id": "SP-001", "description": "药品副作用", "importance": 0.8}]
-        >>> guidance = generator.generate(points, context)
-    """
-
-    def __init__(
-        self,
-        llm: LLMService,
-        rag_retriever: HybridSearchRetriever | None = None,
-    ) -> None:
-        """初始化引导生成器。
-
-        Args:
-            llm: LLM 服务实例
-            rag_retriever: 可选的 RAG 检索器，用于知识库增强
-        """
-        self._llm: LLMService = llm
-        self._rag_retriever: HybridSearchRetriever | None = rag_retriever
-
-    def generate(
-        self,
-        uncovered_points: list[dict[str, Any]],
-        context: dict[str, Any],
-    ) -> str:
-        """生成引导话术。
-
-        根据未覆盖的语义点生成智能引导，帮助销售完善信息传递。
-        首先检索相关知识库内容，然后综合选择最优引导策略。
-
-        Args:
-            uncovered_points: 未覆盖的语义点列表，每项包含 point_id、
-                description 和 importance
-            context: 对话上下文，包含产品信息、客户需求等
-
-        Returns:
-            生成的引导话术字符串，自然融入对话
-        """
-        if not uncovered_points:
-            return "您已经涵盖了所有关键信息，很全面！"
-
-        sorted_points = sorted(
-            uncovered_points,
-            key=lambda x: x.get("importance", 0.0),
-            reverse=True,
-        )
-
-        knowledge_context = self._retrieve_knowledge(sorted_points, context)
-
-        primary_point = sorted_points[0]
-        strategy = self._select_strategy(primary_point)
-
-        guidance = self._build_guidance(strategy, primary_point, context)
-
-        if len(sorted_points) > 1:
-            secondary = self._generate_secondary_guidance(sorted_points[1], context)
-            guidance = f"{guidance}\n{secondary}"
-
-        if knowledge_context:
-            guidance = self._inject_knowledge(guidance, knowledge_context)
-
-        return guidance
-
-    def _retrieve_knowledge(
-        self,
-        points: list[dict[str, Any]],
-        context: dict[str, Any],
-    ) -> str:
-        """从 RAG 知识库检索相关信息。
-
-        Args:
-            points: 语义点列表
-            context: 上下文信息
-
-        Returns:
-            检索到的相关知识内容，如无检索器则返回空字符串
-        """
-        if not self._rag_retriever:
-            return ""
-
-        query = f"{context.get('product_name', '')} {points[0]['description']}"
-        results = self._rag_retriever.retrieve(query, top_k=3)
-
-        if not results:
-            return ""
-
-        return "\n".join(f"- {r['content']}" for r in results[:3])
-
-    def _select_strategy(
-        self,
-        point: dict[str, Any],
-    ) -> Literal["direct", "challenge", "clarification", "supplementary"]:
-        """根据语义点特征选择最优引导策略。
-
-        Args:
-            point: 语义点信息
-
-        Returns:
-            选择的引导策略类型
-        """
-        importance = point.get("importance", 0.5)
-
-        if importance >= 0.8:
-            return "challenge"
-        elif importance >= 0.6:
-            return "direct"
-        elif importance >= 0.4:
-            return "clarification"
-        return "supplementary"
-
-    def _build_guidance(
-        self,
-        strategy: str,
-        point: dict[str, Any],
-        context: dict[str, Any],
-    ) -> str:
-        """根据策略构建引导话术。
-
-        Args:
-            strategy: 引导策略类型
-            point: 语义点信息
-            context: 对话上下文
-
-        Returns:
-            生成的引导话术
-        """
-        description = point["description"]
-        product_name = context.get("product_name", "产品")
-        customer_need = context.get("customer_need", "患者需求")
-
-        if strategy == "direct":
-            return self._direct_question(description, product_name)
-        elif strategy == "challenge":
-            return self._challenge(description, customer_need)
-        elif strategy == "clarification":
-            return self._clarification(description, product_name)
-        return self._supplementary(description, customer_need)
-
-    def _direct_question(self, description: str, product_name: str) -> str:
-        """直接提问策略。
-
-        Args:
-            description: 语义点描述
-            product_name: 产品名称
-
-        Returns:
-            直接提问话术
-        """
-        templates = [
-            f"您能详细说说{description}吗？这对客户选择很重要。",
-            f"关于{description}，您能再展开讲讲吗？",
-            f"能否介绍一下{product_name}在{description}方面的表现？",
-        ]
-        return random.choice(templates)
-
-    def _challenge(self, description: str, customer_need: str) -> str:
-        """质疑挑战策略。
-
-        Args:
-            description: 语义点描述
-            customer_need: 客户需求
-
-        Returns:
-            质疑挑战话术
-        """
-        templates = [
-            f"您提到{description}对{customer_need}影响不大，您确定吗？",
-            f"客户通常很关注{description}这一点，您怎么看？",
-            f"关于{description}，实际上很多患者都很在意，您能详细说说吗？",
-        ]
-        return random.choice(templates)
-
-    def _clarification(self, description: str, product_name: str) -> str:
-        """澄清请求策略。
-
-        Args:
-            description: 语义点描述
-            product_name: 产品名称
-
-        Returns:
-            澄清请求话术
-        """
-        templates = [
-            f"您提到的{description}能举个例子说明一下吗？",
-            f"关于{product_name}在{description}方面的优势，能具体说说吗？",
-            f"您能详细描述一下{description}的场景吗？",
-        ]
-        return random.choice(templates)
-
-    def _supplementary(self, description: str, customer_need: str) -> str:
-        """补充引导策略。
-
-        Args:
-            description: 语义点描述
-            customer_need: 客户需求
-
-        Returns:
-            补充引导话术
-        """
-        templates = [
-            f"除了{description}，还想了解一下对{customer_need}的其他考虑。",
-            f"关于{description}这一点，您还有什么想补充的吗？",
-            f"除了刚才说的，您是否还想了解{description}相关的内容？",
-        ]
-        return random.choice(templates)
-
-    def _generate_secondary_guidance(
-        self,
-        point: dict[str, Any],
-        _context: dict[str, Any],
-    ) -> str:
-        """生成次要引导话术。
-
-        对次要未覆盖点生成较简短的补充引导。
-
-        Args:
-            point: 次要语义点
-            _context: 对话上下文（未使用，保留参数兼容性）
-
-        Returns:
-            补充引导话术
-        """
-        return f"另外，关于{point['description']}也欢迎您补充说明。"
-
-    def _inject_knowledge(self, guidance: str, knowledge: str) -> str:
-        """将知识库内容融入引导话术。
-
-        使用 LLM 将检索到的知识自然融入引导话术，使其更有说服力。
-
-        Args:
-            guidance: 原始引导话术
-            knowledge: 检索到的知识内容
-
-        Returns:
-            融入知识后的引导话术
-        """
-        prompt = (
-            f"作为销售教练，请将以下知识内容自然地融入到引导话术中。\n"
-            f"引导话术：{guidance}\n\n"
-            f"参考知识：\n{knowledge}\n\n"
-            f"请生成融合后的引导话术，保持自然，不显得生硬："
-        )
-
-        messages: list[BaseMessage] = [HumanMessage(content=prompt)]
-        response = self._llm.invoke(messages)
-
-        content: str | list[str | dict[Any, Any]] = response.content
-        if isinstance(content, list):
-            first = content[0]
-            content = str(first) if first else ""
-        return str(content)
-
-
-class HybridSearchRetriever:
-    """混合搜索检索器。
-
-    封装 HybridSearchEngine，提供简化的检索接口。
+@dataclass
+class GuidanceItem:
+    """单条引导建议项。
 
     Attributes:
-        search_engine: 混合搜索引擎实例
-        collections: 可搜索的 Collection 映射
+        gap: 缺失或不足的方面描述
+        urgency: 紧急程度（high / medium / low）
+        suggestion: 具体改进建议
+        talking_point: 参考话术范例
+        expected_effect: 预期效果说明
     """
 
-    def __init__(
-        self,
-        search_engine: HybridSearchEngine,
-        collections: dict[str, Any],
-    ) -> None:
-        """初始化检索器。
+    gap: str = ""
+    urgency: str = "medium"
+    suggestion: str = ""
+    talking_point: str = ""
+    expected_effect: str = ""
+
+
+@dataclass
+class GuidanceResult:
+    """智能引导结果。
+
+    Attributes:
+        priority_list: 按紧急度排序的引导建议列表
+        summary: 一句话总结
+        is_actionable: 是否需要立即行动
+    """
+
+    priority_list: list[GuidanceItem] = field(default_factory=list)
+    summary: str = ""
+    is_actionable: bool = False
+
+
+URGENCY_THRESHOLDS = {"high": 0.5, "medium": 0.8, "low": 1.0}
+
+
+class GuidanceMentor:
+    """引导导师 Agent。
+
+    综合来自 ConversationAnalyst、SemanticCoverageExpert 和 ExpressionCoach 的评估结果，
+    生成结构化的、按优先级排序的销售培训引导建议。
+
+    与旧版模板化 guidance 不同，本 Agent：
+    - 根据覆盖率动态决定是否需要引导（≥80% 自动折叠）
+    - 按紧急度排序改进项（高/中/低三级）
+    - 每条建议包含：问题描述 + 具体做法 + 参考话术范例
+    - 引导语气鼓励性而非批评性
+
+    Attributes:
+        llm_service: LLM 服务实例，用于生成个性化引导内容
+    """
+
+    def __init__(self, llm_service: LLMService) -> None:
+        """初始化引导导师。
 
         Args:
-            search_engine: 混合搜索引擎实例
-            collections: Collection 名称到实例的映射
+            llm_service: LLM 服务实例
         """
-        self._search_engine: HybridSearchEngine = search_engine
-        self._collections: dict[str, Any] = collections
+        self._llm = llm_service
 
-    def retrieve(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
-        """检索相关文档。
+    def generate_guidance(
+        self,
+        coverage_result: CoverageResult,
+        expression_result: ExpressionResult,
+        conversation_analysis: ConversationAnalysis | None,
+        semantic_points: list[SemanticPoint],
+        customer_profile: CustomerProfile | None,
+    ) -> GuidanceResult:
+        """综合评估结果生成结构化引导。
+
+        当覆盖率达到 80% 以上时，返回空引导（is_actionable=False），
+        前端面板将自动折叠。
 
         Args:
-            query: 检索查询
-            top_k: 返回结果数量
+            coverage_result: 语义覆盖检测结果
+            expression_result: 表达能力评估结果
+            conversation_analysis: 对话分析结果（可选）
+            semantic_points: 完整语义点列表（用于获取未覆盖点的描述）
+            customer_profile: 客户画像（可选）
 
         Returns:
-            相关文档列表
+            GuidanceResult 结构化引导结果
         """
-        import asyncio
+        if coverage_result.coverage_rate >= URGENCY_THRESHOLDS["low"]:
+            return GuidanceResult(
+                summary="表现优秀，继续保持！",
+                is_actionable=False,
+            )
+
+        items = self._build_priority_items(
+            coverage_result, expression_result, conversation_analysis, semantic_points
+        )
+
+        if not items:
+            return GuidanceResult(
+                summary="整体表现良好。",
+                is_actionable=False,
+            )
+
+        items.sort(key=lambda x: {"high": 0, "medium": 1, "low": 2}.get(x.urgency, 1))
+        summary = self._generate_summary(items, coverage_result)
+
+        return GuidanceResult(
+            priority_list=items,
+            summary=summary,
+            is_actionable=True,
+        )
+
+    def _build_priority_items(
+        self,
+        coverage_result: CoverageResult,
+        expression_result: ExpressionResult,
+        conversation_analysis: ConversationAnalysis | None,
+        semantic_points: list[SemanticPoint],
+    ) -> list[GuidanceItem]:
+        """构建优先级引导项列表。
+
+        从三个维度收集需要改进的点并分配紧急度：
+        - 未覆盖的语义点 → high urgency（核心缺失）
+        - 表达低分维度（<6分）→ high urgency（明显短板）
+        - 表达中低分维度（6-7分）→ medium urgency（有提升空间）
+        - 异议信号检测 → medium urgency（需关注）
+
+        Args:
+            coverage_result: 覆盖检测结果
+            expression_result: 表达评估结果
+            conversation_analysis: 对话分析结果
+            semantic_points: 语义点列表
+
+        Returns:
+            GuidanceItem 列表
+        """
+        items: list[GuidanceItem] = []
+
+        point_map = {p.point_id: p for p in semantic_points}
+
+        for pid in coverage_result.uncovered_points:
+            sp = point_map.get(pid)
+            description = sp.description if sp else pid
+            item = GuidanceItem(
+                gap=f"未充分覆盖：{description}",
+                urgency="high",
+                suggestion=f"在下次发言中主动提及{description}相关的内容",
+                talking_point=self._generate_talking_point(description),
+                expected_effect=f"提升语义点覆盖率，当前 {coverage_result.coverage_rate:.0%} → 目标 100%",
+            )
+            items.append(item)
+
+        expr = expression_result.analysis
+        dim_config = {
+            "clarity": {
+                "name": "清晰度",
+                "advice": "优化语句结构，使用'总-分-总'模式组织表达",
+                "example": f"先说核心观点（关于{self._get_product_context()}），再展开具体数据支撑，最后总结要点。",
+            },
+            "professionalism": {
+                "name": "专业性",
+                "advice": "引用临床试验数据、权威指南或真实案例增强说服力",
+                "example": "根据XX研究（n=XXX），患者HbA1c平均降低X%，且安全性数据优于对照组。",
+            },
+            "persuasiveness": {
+                "name": "说服力",
+                "advice": "采用'痛点-方案-证据-行动'四步法构建论证逻辑链",
+                "example": "您提到的XX问题确实存在（痛点），我们的方案是XX（方案），临床证明XX（证据），建议先试用（行动）。",
+            },
+        }
+
+        for dim_key, config in dim_config.items():
+            score = getattr(expr, dim_key, 5)
+            if score < 6:
+                urgency = "high"
+            elif score < 7:
+                urgency = "medium"
+            else:
+                continue
+
+            items.append(GuidanceItem(
+                gap=f"{config['name']}偏低（{score}/10分）",
+                urgency=urgency,
+                suggestion=config["advice"],
+                talking_point=config["example"],
+                expected_effect=f"提升{config['name']}至7分以上",
+            ))
+
+        if conversation_analysis and conversation_analysis.objections:
+            for obj in conversation_analysis.objections[:2]:
+                items.append(GuidanceItem(
+                    gap=f"检测到异议信号：{obj}",
+                    urgency="medium",
+                    suggestion=f"准备{obj}相关的应对策略和证据材料",
+                    talking_point="我理解您的顾虑，这一点确实很重要。让我从XX角度为您详细说明...",
+                    expected_effect="提前化解潜在异议，推进对话进程",
+                ))
+
+        return items
+
+    @staticmethod
+    def _get_product_context() -> str:
+        """获取产品上下文信息用于话术模板。
+
+        Returns:
+            产品名称占位符
+        """
+        return "产品疗效与安全性"
+
+    @staticmethod
+    def _generate_talking_point(point_description: str) -> str:
+        """根据语义点描述生成参考话术。
+
+        Args:
+            point_description: 语义点中文描述
+
+        Returns:
+            参考话术文本
+        """
+        return (
+            f"关于{point_description}，我想特别强调的是："
+            f"我们的产品在这方面具有显著优势..."
+        )
+
+    @staticmethod
+    def _generate_summary(items: list[GuidanceItem], coverage_result: CoverageResult) -> str:
+        """生成一句话总结。
+
+        Args:
+            items: 引导项列表
+            coverage_result: 覆盖检测结果
+
+        Returns:
+            总结文本
+        """
+        high_count = sum(1 for i in items if i.urgency == "high")
+        total_count = len(items)
+
+        if high_count > 0:
+            return f"有{high_count}项急需改进（共{total_count}项），建议优先处理标红项目。"
+
+        return f"有{total_count}项可优化，继续加油！"
+
+    def generate_guidance_with_llm(
+        self,
+        coverage_result: CoverageResult,
+        expression_result: ExpressionResult,
+        conversation_analysis: ConversationAnalysis | None,
+        semantic_points: list[SemanticPoint],
+        customer_profile: CustomerProfile | None,
+    ) -> GuidanceResult:
+        """通过 LLM 生成更个性化的引导内容。
+
+        对基础引导结果的每条建议进行 LLM 增强，
+        使话术范例更加贴合实际场景。
+
+        Args:
+            coverage_result: 覆盖检测结果
+            expression_result: 表达评估结果
+            conversation_analysis: 对话分析结果
+            semantic_points: 语义点列表
+            customer_profile: 客户画像
+
+        Returns:
+            GuidanceResult LLM 增强后的引导结果
+        """
+        base_result = self.generate_guidance(
+            coverage_result, expression_result,
+            conversation_analysis, semantic_points, customer_profile,
+        )
+
+        if not base_result.is_actionable or not base_result.priority_list:
+            return base_result
 
         try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            enhanced_items = []
+            for item in base_result.priority_list:
+                enhanced = self._enhance_item_with_llm(item, customer_profile)
+                enhanced_items.append(enhanced)
+            base_result.priority_list = enhanced_items
+        except Exception as e:
+            logger.warning("LLM guidance enhancement failed: %s", e)
 
-        results: list[dict[str, Any]] = loop.run_until_complete(
-            self._search_engine.search(
-                query=query,
-                collections=self._collections,
-                weights={name: 1.0 for name in self._collections},
-            )
+        return base_result
+
+    def _enhance_item_with_llm(
+        self, item: GuidanceItem, customer_profile: CustomerProfile | None
+    ) -> GuidanceItem:
+        """用 LLM 增强单条引导建议的话术范例。
+
+        Args:
+            item: 原始引导项
+            customer_profile: 客户画像（用于定制话术）
+
+        Returns:
+            增强后的引导项
+        """
+        context = ""
+        if customer_profile and customer_profile.position:
+            context = f"客户职位：{customer_profile.position}"
+
+        prompt = (
+            f"你是一位销售培训导师。请针对以下改进建议，生成一句简短的参考话术。\n\n"
+            f"{context}\n"
+            f"待改进项：{item.gap}\n"
+            f"建议方向：{item.suggestion}\n\n"
+            f"请只输出参考话术（不超过50字），不要其他内容。"
         )
-        return results[:top_k]
+
+        try:
+            response = self._llm.invoke([HumanMessage(content=prompt)])
+            item.talking_point = response.content.strip()
+        except Exception as e:
+            logger.warning("LLM talking point generation failed: %s", e)
+
+        return item
