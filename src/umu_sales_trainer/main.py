@@ -99,6 +99,7 @@ app = create_app()
 async def root():
     """根路由，重定向到前端页面。"""
     from fastapi.responses import RedirectResponse
+
     return RedirectResponse(url="/static/index.html")
 
 

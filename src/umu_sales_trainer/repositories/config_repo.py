@@ -3,9 +3,10 @@
 从 YAML 文件加载客户画像、产品资料和知识库配置，支持缓存避免重复加载。
 """
 
-import yaml
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from umu_sales_trainer.models import CustomerProfile, ProductInfo, SellingPoint
 
