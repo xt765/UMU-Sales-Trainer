@@ -10,14 +10,13 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from umu_sales_trainer.core.workflow import invoke, WorkflowState
+from umu_sales_trainer.core.workflow import WorkflowState, invoke
 from umu_sales_trainer.models.conversation import ConversationSession, Message
 from umu_sales_trainer.models.customer import CustomerProfile
 from umu_sales_trainer.models.evaluation import EvaluationResult
 from umu_sales_trainer.models.product import ProductInfo
 from umu_sales_trainer.models.semantic import SemanticPoint
 from umu_sales_trainer.services.database import DatabaseService, get_db_service
-
 
 router = APIRouter(prefix="/api/v1", tags=["api"])
 
@@ -204,6 +203,134 @@ def _build_semantic_points(
     ]
 
 
+def _build_semantic_points_from_product(product: ProductInfo) -> list[SemanticPoint]:
+    """从产品信息构建语义点列表。
+
+    将产品的核心优势(key_selling_points)转换为语义点格式，
+    用于三层检测机制评估。
+
+    Args:
+        product: 产品信息对象
+
+    Returns:
+        SemanticPoint 列表
+    """
+    semantic_points = []
+
+    # 从核心优势生成语义点
+    if product.core_benefits:
+        for idx, benefit in enumerate(product.core_benefits, 1):
+            # 解析benefit字符串（可能包含冒号分隔的描述）
+            if isinstance(benefit, str) and ":" in benefit:
+                parts = benefit.split(":", 1)
+                title = parts[0].strip()
+                description = parts[1].strip() if len(parts) > 1 else title
+            else:
+                title = str(benefit)
+                description = str(benefit)
+
+            # 从标题和描述中提取关键词
+            keywords = _extract_keywords(f"{title} {description}")
+
+            semantic_points.append(
+                SemanticPoint(
+                    point_id=f"SP-{idx:03d}",
+                    description=description,
+                    keywords=keywords,
+                    weight=1.0,
+                )
+            )
+
+    # 从key_selling_points添加额外语义点
+    if product.key_selling_points:
+        for sp_id, sp in product.key_selling_points.items():
+            # 跳过已存在的语义点
+            existing_ids = {p.point_id for p in semantic_points}
+            if sp_id in existing_ids:
+                continue
+
+            keywords = _extract_keywords(
+                f"{sp.description} {' '.join(sp.keywords)} {' '.join(sp.sample_phrases)}"
+            )
+
+            semantic_points.append(
+                SemanticPoint(
+                    point_id=sp_id,
+                    description=sp.description,
+                    keywords=keywords,
+                    weight=sp.weight if hasattr(sp, "weight") else 1.0,
+                )
+            )
+
+    # 如果仍然没有语义点，提供默认的通用语义点
+    if not semantic_points:
+        default_points = [
+            ("SP-001", "产品介绍", ["产品", "介绍", "特点"]),
+            ("SP-002", "疗效效果", ["效果", "疗效", "改善"]),
+            ("SP-003", "安全性", ["安全", "副作用", "不良反应"]),
+        ]
+        for pid, desc, kws in default_points:
+            semantic_points.append(
+                SemanticPoint(
+                    point_id=pid,
+                    description=desc,
+                    keywords=kws,
+                    weight=1.0,
+                )
+            )
+
+    return semantic_points
+
+
+def _extract_keywords(text: str) -> list[str]:
+    """从文本中提取关键词。
+
+    简单的关键词提取，基于中文分词和常见词汇模式。
+
+    Args:
+        text: 输入文本
+
+    Returns:
+        关键词列表
+    """
+    import re
+
+    # 常见停用词
+    stop_words = {
+        "的",
+        "了",
+        "是",
+        "在",
+        "有",
+        "和",
+        "与",
+        "或",
+        "等",
+        "及",
+        "对",
+        "为",
+        "以",
+        "被",
+        "把",
+        "从",
+        "到",
+    }
+
+    # 提取中文词汇（2-6个字符）
+    words = re.findall(r"[\u4e00-\u9fff]{2,6}", text)
+
+    # 过滤停用词并去重
+    keywords = []
+    seen = set()
+    for word in words:
+        word_lower = word.lower()
+        if word_lower not in stop_words and word_lower not in seen:
+            keywords.append(word)
+            seen.add(word_lower)
+
+    return keywords[:10]  # 限制最多10个关键词
+
+
 def _format_evaluation(eval_result: EvaluationResult) -> dict[str, Any]:
     """格式化评估结果为字典。
 
@@ -242,6 +369,7 @@ def create_session(request: CreateSessionRequest) -> CreateSessionResponse:
         HTTPException: 数据库保存失败时抛出
     """
     import uuid
+
     session_id = str(uuid.uuid4())
     now = datetime.utcnow()
 
@@ -316,7 +444,9 @@ def send_message(
 
     customer = _build_customer_profile(session.customer_profile)
     product = _build_product_info(session.product_info)
-    semantic_points = _build_semantic_points(None)
+
+    # 构建语义点列表（从产品信息的core_benefits和selling_points生成）
+    semantic_points = _build_semantic_points_from_product(product)
 
     messages_for_workflow = [
         Message(
@@ -362,12 +492,16 @@ def send_message(
         turn=turn,
     )
 
-    eval_dict = _format_evaluation(evaluation) if evaluation else {
-        "coverage_status": {},
-        "coverage_rate": 0.0,
-        "overall_score": 0.0,
-        "expression_analysis": {"clarity": 0, "professionalism": 0, "persuasiveness": 0},
-    }
+    eval_dict = (
+        _format_evaluation(evaluation)
+        if evaluation
+        else {
+            "coverage_status": {},
+            "coverage_rate": 0.0,
+            "overall_score": 0.0,
+            "expression_analysis": {"clarity": 0, "professionalism": 0, "persuasiveness": 0},
+        }
+    )
 
     return SendMessageResponse(
         session_id=session_id,

@@ -6,8 +6,11 @@
 
 from __future__ import annotations
 
+import logging
+import random
 from typing import TYPE_CHECKING, Literal, Optional, TypedDict
 
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 
 if TYPE_CHECKING:
@@ -18,6 +21,8 @@ from umu_sales_trainer.models.customer import CustomerProfile
 from umu_sales_trainer.models.evaluation import EvaluationResult
 from umu_sales_trainer.models.product import ProductInfo
 from umu_sales_trainer.models.semantic import SemanticPoint
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowState(TypedDict):
@@ -152,8 +157,7 @@ def _node_analyze(state: WorkflowState) -> WorkflowState:
         "message_length": len(sales_msg),
         "customer_industry": customer.industry,
         "contains_objection": any(
-            keyword in sales_msg
-            for keyword in ["贵", "价格", "不需要", "考虑", "比较"]
+            keyword in sales_msg for keyword in ["贵", "价格", "不需要", "考虑", "比较"]
         ),
         "analyzed": True,
     }
@@ -224,8 +228,8 @@ def _node_guidance(state: WorkflowState) -> WorkflowState:
 def _node_simulate(state: WorkflowState) -> WorkflowState:
     """模拟节点：生成AI客户回复。
 
-    根据当前对话上下文，生成AI客户角色的回复。
-    用于销售训练场景中的客户模拟。
+    根据当前对话上下文，调用LLM或使用规则引擎生成AI客户角色的回复。
+    优先使用真实LLM，失败时回退到智能规则回复。
 
     Args:
         state: 当前工作流状态
@@ -235,15 +239,204 @@ def _node_simulate(state: WorkflowState) -> WorkflowState:
     """
     customer = state.get("customer_profile", CustomerProfile("", ""))
     sales_msg = state.get("sales_message", "")
+    history = state.get("conversation_history", [])
 
-    state["ai_response"] = (
-        f"作为{customer.position}，我对您的方案很感兴趣。"
-        + f"请问{customer.concerns[0] if customer.concerns else '相关细节'}如何？"
-        if sales_msg
-        else "您好，请问有什么可以帮您的？"
-    )
+    ai_response = _generate_ai_response(customer, sales_msg, history)
+
+    state["ai_response"] = ai_response
     state["next_node"] = "end"
     return state
+
+
+def _generate_ai_response(
+    customer: CustomerProfile,
+    sales_msg: str,
+    history: list[Message],
+) -> str:
+    """生成AI客户回复。
+
+    尝试调用LLM服务生成动态回复，如果失败则使用基于规则的智能回复。
+
+    Args:
+        customer: 客户画像
+        sales_msg: 销售人员最新消息
+        history: 对话历史
+
+    Returns:
+        AI客户回复文本
+    """
+    # 尝试使用LLM
+    llm_response = _try_llm_generation(customer, sales_msg, history)
+    if llm_response:
+        return llm_response
+
+    # 回退到规则引擎
+    logger.info("LLM generation failed, falling back to rule-based response")
+    return _generate_rule_based_response(customer, sales_msg, history)
+
+
+def _try_llm_generation(
+    customer: CustomerProfile,
+    sales_msg: str,
+    history: list[Message],
+) -> Optional[str]:
+    """尝试调用LLM生成回复。
+
+    Returns:
+        LLM生成的回复字符串，如果失败返回None
+    """
+    try:
+        from umu_sales_trainer.services.llm import LLMServicesError, create_llm
+
+        # 尝试创建LLM实例（会检查API key）
+        llm = create_llm("dashscope")
+
+        # 构建系统提示
+        system_prompt = f"""你是一位{customer.position}，正在与一位医药销售代表进行产品介绍对话。
+
+客户画像：
+- 行业：{customer.industry}
+- 职位：{customer.position}
+- 关注点：{", ".join(customer.concerns) if customer.concerns else "未指定"}
+- 性格特点：{customer.personality}
+- 常见异议倾向：{", ".join(customer.objection_tendencies) if customer.objection_tendencies else "无"}
+
+请以该客户的身份自然地回应销售代表的话术。你的回应应该：
+1. 符合{customer.position}的专业身份和性格特点
+2. 基于之前的对话历史保持连贯性
+3. 自然地提出相关问题或表达关切（如安全性、价格、疗效等）
+4. 回应长度控制在50-150字之间
+5. 使用中文回答"""
+
+        # 构建消息列表
+        messages = [SystemMessage(content=system_prompt)]
+
+        # 添加历史对话
+        for msg in history[-6:]:  # 最近6轮对话作为上下文
+            if msg.role == "user":
+                messages.append(HumanMessage(content=msg.content))
+            elif msg.role == "assistant":
+                messages.append(HumanMessage(content=f"[客户 previous response]: {msg.content}"))
+
+        # 添加当前用户消息
+        if sales_msg:
+            messages.append(HumanMessage(content=sales_msg))
+
+        # 调用LLM
+        response = llm.invoke(messages)
+        ai_text = response.content.strip()
+
+        if ai_text and len(ai_text) > 5:
+            logger.info(f"LLM generated response: {ai_text[:50]}...")
+            return ai_text
+
+    except (ImportError, LLMServicesError) as e:
+        logger.warning(f"LLM service unavailable: {e}")
+    except Exception as e:
+        logger.error(f"LLM generation error: {e}")
+
+    return None
+
+
+def _generate_rule_based_response(
+    customer: CustomerProfile,
+    sales_msg: str,
+    history: list[Message],
+) -> str:
+    """基于规则生成智能回复。
+
+    当LLM不可用时，根据对话上下文和客户画像生成多样化的回复。
+    通过分析用户输入关键词和历史轮次来决定回复策略。
+
+    Args:
+        customer: 客户画像
+        sales_msg: 销售人员消息
+        history: 对话历史
+
+    Returns:
+        规则生成的回复文本
+    """
+    turn_count = len([m for m in history if m.role == "user"])
+
+    # 定义不同阶段的回复模板库
+    opening_responses = [
+        f"您好，我是{customer.position}。听说您有一款新产品要介绍？请说说看。",
+        "你好，欢迎来访。我这边时间有限，请直接说明您的来意吧。",
+        "您好。我们科室最近在评估新的治疗方案，如果您有好的产品，可以简单介绍一下。",
+    ]
+
+    interest_responses = [
+        f"嗯，听起来不错。作为{customer.position}，我比较关心产品的{customer.concerns[0] if customer.concerns else '临床数据'}，这方面能详细说说吗？",
+        f"有点意思。不过我们医院对这类产品要求比较严格，特别是{customer.concerns[0] if customer.concerns else '安全性'}方面，你们做得怎么样？",
+        f"了解了基本情况。我想知道这款产品相比市面上其他方案有什么优势？特别是在{customer.concerns[0] if len(customer.concerns) > 0 else '疗效'}方面。",
+    ]
+
+    objection_responses = [
+        "这个价格确实需要考虑一下。您知道我们科室的预算情况，能不能申请一些优惠或者分期方案？",
+        f"证据方面，除了厂商提供的数据，有没有第三方临床试验的结果？作为{customer.position}，我需要看到更权威的数据支撑。",
+        "我理解您的观点，但我们这里之前用过类似的产品，效果并不理想。您能保证这次会有所不同吗？",
+    ]
+
+    follow_up_responses = [
+        "好的，我记下了。还有其他方面的信息吗？比如用药方案、副作用这些我也比较关注。",
+        "明白了。那如果我们在临床上遇到一些特殊情况，比如患者依从性不好，你们有什么支持措施吗？",
+        "嗯...让我想想。其实我还想了解一下，这款产品的医保覆盖情况怎么样？这对我们推广很重要。",
+    ]
+
+    closing_responses = [
+        "好的，今天的信息量不少，我需要时间消化一下。您可以把产品资料留下吗？我会和团队讨论后再联系您。",
+        "感谢您的介绍。整体来说印象还不错，但我还需要再对比一下其他方案。我们可以保持联系。",
+        "今天先聊到这里吧。如果后续有新的临床数据或者优惠政策，欢迎随时告诉我。",
+    ]
+
+    # 分析用户消息关键词
+    msg_lower = sales_msg.lower() if sales_msg else ""
+
+    # 判断回复阶段和类型
+    if turn_count <= 1:
+        # 开场阶段
+        if not sales_msg or sales_msg in ["请开始对话", ""]:
+            return random.choice(opening_responses)
+        return random.choice(interest_responses)
+
+    # 检测关键词决定回复策略
+    has_price_keyword = any(kw in msg_lower for kw in ["价格", "贵", "便宜", "预算", "成本"])
+    has_evidence_keyword = any(
+        kw in msg_lower for kw in ["证据", "研究", "试验", "数据", "文献", "论文"]
+    )
+    has_safety_keyword = any(kw in msg_lower for kw in ["安全", "副作用", "不良反应", "耐受"])
+    has_efficacy_keyword = any(kw in msg_lower for kw in ["效果", "疗效", "控制率", "降低", "改善"])
+
+    if has_price_keyword or any(kw in msg_lower for kw in customer.objection_tendencies):
+        return random.choice(objection_responses)
+
+    if has_safety_keyword or has_evidence_keyword:
+        return random.choice(
+            [
+                f"{customer.concerns[0] if customer.concerns else '安全性'}确实是我们最关注的。您提到的这一点很重要，能展开说说具体数据吗？",
+                f"关于{'安全性' if has_safety_keyword else '证据支持'}，我想了解更多细节。有没有相关的头对头研究结果？",
+                f"这点很关键。在我们科，{'安全性' if has_safety_keyword else '证据充分性'}是首要考虑因素。",
+            ]
+        )
+
+    if has_efficacy_keyword:
+        return random.choice(
+            [
+                "疗效数据看起来不错。但实际临床应用中，患者的依从性怎么样？这点我很关心。",
+                "降糖效果是基础，但我们更看重长期的安全性 profile。这方面的数据呢？",
+                "控制率数据令人印象深刻。不过我想知道，对于特殊人群比如老年人，效果如何？",
+            ]
+        )
+
+    # 根据轮次选择回复
+    if turn_count >= 5:
+        return random.choice(closing_responses)
+    elif turn_count >= 3:
+        return random.choice(follow_up_responses)
+    else:
+        # 中间轮次，混合使用兴趣和追问
+        all_mid = interest_responses + follow_up_responses
+        return random.choice(all_mid)
 
 
 def _node_end(state: WorkflowState) -> WorkflowState:

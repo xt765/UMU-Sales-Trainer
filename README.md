@@ -35,6 +35,7 @@
 - [十八、综合评分算法详解](#十八综合评分算法详解)
 - [十九、前端交互架构](#十九前端交互架构)
 - [二十、异常处理与降级策略](#二十异常处理与降级策略)
+- [二十一、系统扩展性与未来规划](#二十一系统扩展性与未来规划)
 
 ---
 
@@ -2604,3 +2605,552 @@ data = {
 3. **边界约束**: 所有评分值 clamp 到合法范围（如 clarity 限制在 1-10）
 4. **空值检查**: 列表/字典操作前检查 None 或空
 5. **日志记录**: 所有关键路径都有 logging 输出，便于排查问题
+
+---
+
+## 二十一、系统扩展性与未来规划
+
+> 本章基于实际源代码分析，阐述当前架构为 4 个扩展方向预留的接口和实现路径。所有分析均对应到具体的文件和代码行。
+
+### 21.1 架构扩展总览
+
+```mermaid
+flowchart TB
+    subgraph Core["核心层（稳定）"]
+        WF["LangGraph Workflow<br/>workflow.py"]
+        API["FastAPI Router<br/>router.py"]
+        DB["SQLite + ChromaDB<br/>database.py / chroma.py"]
+        MDL["数据模型<br/>models/"]
+    end
+
+    subgraph Ext1["扩展一：多 LLM Provider"]
+        direction LR
+        LLM["llm.py<br/>create_llm() 工厂"]
+        CFG["config.py<br/>Settings.LLM_PROVIDER"]
+        ENV[".env<br/>API Key 环境变量"]
+        LLM --> CFG --> ENV
+    end
+
+    subgraph Ext2["扩展二：个性化客户行为"]
+        direction LR
+        SIM["simulator.py<br/>_build_system_prompt()"]
+        CP["customer.py<br/>CustomerProfile.personality"]
+        YAML["personality_prompts.yaml<br/>性格-Prompt 映射表"]
+        SIM --> CP --> YAML
+    end
+
+    subgraph Ext3["扩展三：话术模式学习"]
+        direction LR
+        PL["新增: pattern_learner.py<br/>话术模式学习器"]
+        PS["新增: pattern_store.py<br/>模式持久化存储"]
+        RAG["hybrid_search.py<br/>RAG 知识库注入"]
+        PL --> PS --> RAG
+    end
+
+    subgraph Ext4["扩展四：国际化 i18n"]
+        direction LR
+        I18N["新增: i18n/ 目录<br/>多语言 Prompt 模板"]
+        LOC["config.py<br/>Settings.LOCALE 字段"]
+        UI["static/<br/>前端国际化字符串"]
+        I18N --> LOC --> UI
+    end
+
+    Core -.->|"依赖抽象层"| Ext1
+    Core -.->|"读取 personality"| Ext2
+    Core -.->|"消费历史数据"| Ext3
+    Core -.->|"加载语言资源"| Ext4
+
+    style Ext1 fill:#E3F2FD
+    style Ext2 fill:#FFF3E0
+    style Ext3 fill:#F3E5F5
+    style Ext4 fill:#E8F5E9
+```
+
+### 21.2 扩展方向一：接入更多 LLM Provider
+
+#### 当前架构的可扩展性分析
+
+基于 [llm.py](src/umu_sales_trainer/services/llm.py) 的实际代码，当前 LLM 调用链路如下：
+
+```
+调用方 (analyzer/evaluator/simulator/guidance)
+    → LLMService.invoke() / ainvoke()          # 统一接口，不感知 Provider
+        → self.model.invoke()                   # ChatOpenAI 实例
+            → HTTP POST {base_url}/chat/completions  # OpenAI 兼容协议
+```
+
+**关键设计决策及其扩展含义**：
+
+| 设计要素 | 代码位置 | 扩展能力 |
+|----------|----------|----------|
+| 使用 `ChatOpenAI` 作为统一模型类 | [llm.py:117](src/umu_sales_trainer/services/llm.py#L117) | 天然兼容所有提供 OpenAI 兼容 API 的服务 |
+| `BaseChatModel` 类型注解 | [llm.py:44](src/umu_sales_trainer/services/llm.py#L44) | 可替换为任意 LangChain 支持的模型后端 |
+| `create_llm()` 工厂方法 | [llm.py:91](src/umu_sales_trainer/services/llm.py#L91) | 新增 elif 分支即可支持新 Provider |
+| `LLM_PROVIDER` Literal 类型约束 | [config.py:45](src/umu_sales_trainer/config.py#L45) | 需扩展 Literal 值集合 |
+| `get_llm_api_key()` 路由方法 | [config.py:102](src/umu_sales_trainer/config.py#L102) | 需添加新 Provider 的 key/url 映射 |
+| `bind_tools()` 方法已预留 | [llm.py:79](src/umu_sales_trainer/services/llm.py#L79) | 支持 Function Calling 扩展 |
+
+> **面试要点**: 选择 `ChatOpenAI` 而非各厂商专用 SDK 的核心原因是**统一抽象**。DashScope 和 DeepSeek 都提供了 OpenAI 兼容的 API 端点，使用同一套客户端代码即可切换，无需改动调用方。
+
+#### 接入新 Provider 的具体步骤
+
+以接入 **OpenAI GPT-4** 为例：
+
+**Step 1 — 添加环境变量**（`.env`）：
+```bash
+OPENAI_API_KEY=sk-your-openai-key-here
+```
+
+**Step 2 — 扩展配置类型**（[config.py:45](src/umu_sales_trainer/config.py#L45)）：
+```python
+# 修改前
+LLM_PROVIDER: Literal["dashscope", "deepseek"] = Field(default="dashscope", ...)
+
+# 修改后
+LLM_PROVIDER: Literal["dashscope", "deepseek", "openai"] = Field(default="dashscope", ...)
+OPENAI_API_KEY: str = Field(default="", description="OpenAI API 密钥")
+```
+
+**Step 3 — 扩展工厂方法**（[llm.py:91](src/umu_sales_trainer/services/llm.py#L91)）：
+```python
+def create_llm(provider: Literal["dashscope", "deepseek", "openai"] = "dashscope") -> LLMService:
+    # ... existing dashscope/deepseek branches ...
+    
+    elif provider == "openai":
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        if not api_key:
+            raise LLMServicesError("OPENAI_API_KEY environment variable not set")
+        model: BaseChatModel = ChatOpenAI(
+            model="gpt-4o",           # 或 gpt-4-turbo, gpt-3.5-turbo
+            api_key=SecretStr(api_key),
+            # base_url 默认为 https://api.openai.com/v1，无需指定
+        )
+    else:
+        raise LLMServicesError(f"Unsupported provider: {provider}")
+    return LLMService(model=model, provider=provider)
+```
+
+**Step 4 — 扩展密钥路由**（[config.py:102](src/umu_sales_trainer/config.py#L102)）：
+```python
+def get_llm_api_key(self) -> tuple[str, str]:
+    if self.LLM_PROVIDER == "dashscope":
+        # ... existing ...
+    elif self.LLM_PROVIDER == "deepseek":
+        # ... existing ...
+    elif self.LLM_PROVIDER == "openai":                    # 新增
+        if not self.OPENAI_API_KEY:
+            raise ValueError("OPENAI_API_KEY is not set")
+        return self.OPENAI_API_KEY, "https://api.openai.com/v1"
+    raise ValueError(f"Unsupported LLM provider: {self.LLM_PROVIDER}")
+```
+
+**总改动量**: 4 个文件，约 **40 行新代码**。
+
+#### 各主流 LLM 接入方案一览
+
+| LLM 服务 | SDK 方式 | Base URL | 模型名示例 | 特殊配置 |
+|----------|----------|----------|-----------|----------|
+| **OpenAI GPT-4** | ChatOpenAI（原生） | `https://api.openai.com/v1` | gpt-4o, gpt-4-turbo | 无 |
+| **Anthropic Claude** | ChatOpenAI + 代理 | `https://anyrouter.top/v1` | claude-sonnet-4-20250514 | 需第三方代理或 langchain-anthropic |
+| **Google Gemini** | ChatOpenAI + 代理 | `https://generativelanguage.googleapis.com/v1beta/openai` | gemini-2.0-flash | Google 官方 OpenAI 兼容端点 |
+| **本地 Ollama** | ChatOpenAI | `http://localhost:11434/v1` | llama3, qwen2.5 | 无需 API Key |
+| **本地 vLLM** | ChatOpenAI | `http://localhost:8000/v1` | 自定义模型 | 无需 API Key |
+| **Azure OpenAI** | AzureChatOpenAI | Azure Endpoint | gpt-4o | 需 azure_endpoint + api_version |
+
+#### 未来重构建议：Provider 注册表模式
+
+当前 `create_llm()` 使用 if-elif 链，当 Provider 数量超过 5 个时建议重构为注册表模式：
+
+```python
+# llm_registry.py（未来）
+from typing import Callable
+
+ProviderFactory = Callable[[str], BaseChatModel]
+
+_PROVIDER_REGISTRY: dict[str, ProviderFactory] = {}
+
+def register_provider(name: str) -> Callable[[ProviderFactory], ProviderFactory]:
+    """装饰器：注册新的 LLM Provider 工厂函数。"""
+    def decorator(factory: ProviderFactory) -> ProviderFactory:
+        _PROVIDER_REGISTRY[name] = factory
+        return factory
+    return decorator
+
+@register_provider("openai")
+def _create_openai(api_key: str) -> BaseChatModel:
+    return ChatOpenAI(model="gpt-4o", api_key=SecretStr(api_key))
+
+@register_provider("ollama")
+def _create_ollama(base_url: str = "http://localhost:11434/v1") -> BaseChatModel:
+    return ChatOpenAI(model="llama3", base_url=base_url)
+```
+
+### 21.3 扩展方向二：个性化客户行为引擎
+
+#### CustomerProfile.personality 的现状与潜力
+
+当前 [customer.py](src/umu_sales_trainer/models/customer.py) 中定义了 `personality` 字段：
+
+```python
+@dataclass
+class CustomerProfile:
+    industry: str
+    position: str
+    concerns: list[str] = field(default_factory=list)
+    personality: str = ""                          # 已定义但未充分利用
+    objection_tendencies: list[str] = field(default_factory=list)
+```
+
+**personality 在当前系统中的使用情况**：
+
+| 使用位置 | 是否使用 personality | 说明 |
+|----------|---------------------|------|
+| [analyzer.py:_build_analysis_prompt()](src/umu_sales_trainer/core/analyzer.py#L96-L104) | 是 | 拼接到 Prompt 中作为「性格：{personality}」 |
+| [simulator.py:_build_user_message()](src/umu_sales_trainer/core/simulator.py#L168-194) | 否 | 只用了 industry/position/concerns |
+| [simulator.py:_build_system_prompt()](src/umu_sales_trainer/core/simulator.py#L59-98) | 否 | 硬编码张主任人设，未根据 personality 动态化 |
+| [guidance.py:_select_strategy()](src/umu_sales_trainer/core/guidance.py#L121-141) | 否 | 基于 importance 选策略，不考虑性格适配 |
+
+**结论**: `personality` 字段在数据模型中已存在且传入分析流程，但在**最关键的客户模拟环节未被使用**——这是最大的扩展机会。
+
+#### 从「固定人设」到「动态人设生成」的演进路径
+
+**当前实现**（[simulator.py:59-98](src/umu_sales_trainer/core/simulator.py#L59-L98)）：
+
+```python
+def _build_system_prompt(self) -> str:
+    return """你是张主任，内分泌科主任医师..."""   # 固定模板，无参数化
+```
+
+**演进方案 — 基于 personality 的动态 Prompt 生成**：
+
+```python
+def _build_system_prompt(self, customer_profile: CustomerProfile | None = None) -> str:
+    """根据客户画像动态生成 System Prompt。
+
+    Args:
+        customer_profile: 客户画像，用于确定回复风格
+    """
+    personality = (customer_profile.personality if customer_profile else "") or "专业严谨"
+
+    prompt_template = self._load_personality_prompt(personality)
+    return prompt_template.format(
+        position=customer_profile.position if customer_profile else "主任",
+        industry=customer_profile.industry if customer_profile else "",
+        concerns=", ".join(customer_profile.concerns) if customer_profile and customer_profile.concerns else "产品质量",
+    )
+
+def _load_personality_prompt(self, personality: str) -> str:
+    """从 YAML 加载对应性格的 Prompt 模板。
+
+    文件结构：data/personality_prompts/
+    ├── professional.yaml     # 专业严谨型
+    ├── friendly.yaml         # 亲和热情型
+    ├── skeptical.yaml        # 多疑谨慎型
+    └── decisive.yaml         # 果断直接型
+    """
+    import yaml
+    template_path = f"data/personality_prompts/{personality}.yaml"
+    with open(template_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    return data["system_prompt"]
+```
+
+#### 性格-回复风格映射设计
+
+| personality 值 | 对应风格 | 回复特征 | 引导策略偏好 |
+|---------------|----------|----------|-------------|
+| `professional` | 专业严谨型 | 数据驱动、关注证据、提问深入 | challenge（质疑挑战）为主 |
+| `friendly` | 亲和热情型 | 积极回应、表达兴趣、氛围轻松 | direct（直接提问）为主 |
+| `skeptical` | 多疑谨慎型 | 反复确认、要求证明、不易被说服 | clarification（澄清请求）为主 |
+| `decisive` | 果断直接型 | 快速判断、言简意赅、直奔主题 | supplementary（补充引导）为主 |
+| `analytical` | 分析型 | 逻辑严密、对比分析、权衡利弊 | challenge + clarification 组合 |
+
+**需要改动的文件清单**：
+
+| 文件 | 改动内容 | 行数估算 |
+|------|----------|---------|
+| `simulator.py` | `_build_system_prompt()` 参数化 + `_load_personality_prompt()` | ~60 行 |
+| `customer.py` | `personality` 升级为 Literal 类型或增加验证 | ~10 行 |
+| `guidance.py` | `_select_strategy()` 增加 personality 参数 | ~15 行 |
+| `data/personality_prompts/*.yaml`（新建） | 5 个性格的完整 Prompt 模板 | ~200 行 |
+| **合计** | | **~285 行** |
+
+### 21.4 扩展方向三：话术模式学习系统
+
+#### 当前系统中可用于学习的隐式数据源
+
+虽然当前代码没有显式的「学习」模块，但架构中已经积累了可用于训练的数据：
+
+| 数据源 | 存储位置 | 数据内容 | 学习价值 |
+|--------|----------|----------|----------|
+| **对话历史** | `messages` 表 | 每轮销售发言全文 + AI 回复 | NLP 提取优秀话术模式 |
+| **语义覆盖记录** | `coverage_records` 表 | 每个 point_id 的 covered/not_covered + coverage_details(JSON) | 关联「什么话术 → 成功覆盖了什么点」 |
+| **表达评分** | `ExpressionAnalysis` (嵌套在 coverage_details) | clarity/professionalism/persuasiveness 三维分数 | 识别高分话术特征 |
+| **引导策略选择** | `guidance.py:_select_strategy()` | importance → strategy 的映射结果 | 统计哪种策略对哪个语义点更有效 |
+| **关键词命中** | `evaluator.py:_keyword_detection()` | keywords 列表的命中比例 | 发现高频有效关键词组合 |
+
+#### PatternLearner 模块设计方案
+
+```mermaid
+flowchart LR
+    Data[(SQLite<br/>messages + coverage_records)] --> Extract["提取阶段<br/>筛选高分话术"]
+    Extract --> Feature["特征工程<br/>提取 NLP 特征"]
+    Feature --> Cluster["聚类/分类<br/>按语义点分组"]
+    Cluster --> Pattern["模式提炼<br/>生成话术模板"]
+    Pattern --> Store[(Pattern Store<br/>pattern_store.py)]
+    Store --> Inject["注入阶段<br/>写入知识库或引导策略"]
+
+    subgraph Features["可提取的特征"]
+        F1["句子长度分布"]
+        F2["关键词共现频率"]
+        F3["句式结构模式（主谓宾/因果/对比）"]
+        F4["情感倾向（积极/中性/消极）"]
+        F5["专业术语密度"]
+    end
+
+    Feature --> Features
+```
+
+**核心模块伪代码**：
+
+```python
+# core/pattern_learner.py（新增模块）
+
+class PatternLearner:
+    """话术模式学习器。
+
+    从历史训练数据中挖掘高表现话术的共同特征，
+    生成可复用的话术模板，注入引导策略或知识库。
+    """
+
+    def __init__(self, db_service: DatabaseService):
+        self._db = db_service
+
+    async def learn_from_history(
+        self,
+        min_score: float = 70.0,          # 最低合格分
+        min_clarity: int = 7,              # 最低清晰度
+        top_k_per_point: int = 5,          # 每个语义点保留 Top-K 模式
+    ) -> dict[str, list[dict]]:
+        """从历史数据中学习话术模式。
+
+        流程：
+        1. 从 coverage_records 筛选 is_covered=1 且 expression_score >= min_score 的记录
+        2. 关联 messages 表获取对应的销售发言原文
+        3. 按 point_id 分组
+        4. 对每组提取 NLP 特征（关键词、句式、长度等）
+        5. 聚合生成该语义点的「优质话术特征画像」
+
+        Returns:
+            {point_id: [pattern_dict, ...]}
+        """
+        records = await self._db.get_high_score_coverage_records(
+            min_score=min_score, min_clarity=min_clarity
+        )
+
+        patterns_by_point: dict[str, list[dict]] = {}
+        for record in records:
+            message = await self._db.get_message(record.session_id, record.turn)
+            features = self._extract_features(message.content)
+            patterns_by_point.setdefault(record.point_id, []).append(features)
+
+        for point_id in patterns_by_point:
+            patterns_by_point[point_id] = self._aggregate_patterns(
+                patterns_by_point[point_id], top_k=top_k_per_point
+            )
+
+        return patterns_by_point
+
+    def _extract_features(self, text: str) -> dict:
+        """从单条话术中提取 NLP 特征。"""
+        import re
+
+        return {
+            "length": len(text),
+            "sentence_count": len(re.split(r'[。！？.!?]', text)),
+            "keyword_density": self._count_domain_keywords(text) / max(len(text), 1),
+            "has_data_evidence": bool(re.search(r'\d+[.%％]|临床|试验|研究', text)),
+            "has_comparison": any(kw in text for kw in ["相比", "对比", "优于", "比...更"]),
+            "has_question": "?" in text or "？" in text,
+            "opening_pattern": self._classify_opening(text[:20]),
+        }
+
+    def _aggregate_patterns(
+        self, feature_list: list[dict], top_k: int = 5
+    ) -> list[dict]:
+        """聚合多条话术的特征，生成模式摘要。"""
+        # 按某种综合得分排序，返回 Top-K
+        scored = [
+            {**f, "composite_score": (
+                f.get("clarity", 5) * 0.3 +
+                f.get("persuasiveness", 5) * 0.4 +
+                min(f.get("length", 0) / 100, 1.0) * 0.3
+            )}
+            for f in feature_list
+        ]
+        return sorted(scored, key=lambda x: x["composite_score"], reverse=True)[:top_k]
+```
+
+#### 与现有系统的整合方式
+
+```mermaid
+flowchart TD
+    subgraph Current["现有系统"]
+        Eval["SemanticEvaluator<br/>评估发言质量"]
+        Guide["GuidanceGenerator<br/>生成引导话术"]
+        Sim["CustomerSimulator<br/>模拟客户回复"]
+    end
+
+    subgraph New["新增学习模块"]
+        PL["PatternLearner<br/>学习话术模式"]
+        PS["PatternStore<br/>存储模式数据"]
+    end
+
+    subgraph Integration["整合点"]
+        I1["引导策略优化<br/>_select_strategy() 引用历史成功率"]
+        I2["知识库增强<br/>优质话术注入 ChromaDB"]
+        I3["动态难度调整<br/>根据学员水平调整客户反应强度"]
+    end
+
+    Eval -->|"high-score results"| PL
+    PL --> PS
+    PS --> I1
+    PS --> I2
+    PS --> I3
+    I1 --> Guide
+    I2 --> Sim
+    I3 --> Sim
+```
+
+**三种整合路径**：
+
+| 整合方式 | 改动范围 | 效果 | 实现优先级 |
+|----------|----------|------|-----------|
+| **引导策略优化** | 修改 `_select_strategy()` 加入历史数据权重 | 引导更有针对性 | P0（推荐首选） |
+| **知识库注入** | 将优质话术写入 ChromaDB collection | RAG 检索时返回范例参考 | P1 |
+| **动态难度调整** | Simulator 根据学员水平调整回复难度 | 自适应训练体验 | P2 |
+
+### 21.5 扩展方向四：国际化（i18n）
+
+#### 全局 Prompt 语言分布清单
+
+以下逐一列出所有硬编码中文文本的位置：
+
+| # | 组件 | 文件 | 行号 | 中文文本示例 | 国际化方式 |
+|---|------|------|------|-------------|-----------|
+| 1 | 分析器角色设定 | [analyzer.py](src/umu_sales_trainer/core/analyzer.py) | L128 | 「你是一位专业的销售培训分析师」 | 替换为模板变量 |
+| 2 | 分析器输出格式 | analyzer.py | L137-151 | JSON 字段名为中文（key_information_points） | 字段名保持英文（JSON 标准），仅用户可见文本需翻译 |
+| 3 | 评估器判断提示 | evaluator.py | _llm_judgment() | 「判断以下销售话术是否覆盖了...」 | 按语言加载不同 Prompt |
+| 4 | 评估器评分维度 | evaluator.py | _analyze_expression() | 「清晰度/专业性/说服力」 | 维度名称本地化 |
+| 5 | 引导模板 - 直接提问 | [guidance.py](src/umu_sales_trainer/core/guidance.py) | L181-186 | 「您能详细说说{description}吗？」 | 模板字符串替换 |
+| 6 | 引导模板 - 质疑挑战 | guidance.py | L198-203 | 「您提到{description}影响不大...」 | 模板字符串替换 |
+| 7 | 引导模板 - 澄清请求 | guidance.py | L205-220 | 「您提到的能举个例子吗？」 | 模板字符串替换 |
+| 8 | 引导模板 - 补充引导 | guidance.py | L222-237 | 「除了{description}还想了解...」 | 模板字符串替换 |
+| 9 | 默认引导语 | guidance.py | L72 | 「您已经涵盖了所有关键信息，很全面！」 | 翻译 |
+| 10 | 客户模拟 System Prompt | [simulator.py](src/umu_sales_trainer/core/simulator.py) | L68-98 | 完整张主任人设（~30行） | 整体替换为英文版 |
+| 11 | 用户消息标签 | simulator.py | L168-194 | 「销售人员发言」「客户画像」「产品信息」 | 标签翻译 |
+| 12 | 角色标签 | simulator.py | L147-148 | 「医生」「张主任」 | 角色名翻译 |
+| 13 | RAG 注入 Prompt | guidance.py | L269-274 | 「作为销售教练，请将以下知识...」 | 翻译 |
+| 14 | 前端 UI | static/index.html | 全文 | 所有按钮/标题/提示文案 | JS i18n 库（如 i18next） |
+| 15 | 前端交互 | static/app.js | 全文 | Toast 提示、状态文字 | 同上 |
+| 16 | 错误消息 | router.py | HTTPException detail | 英文（无需改） | 保持英文 |
+
+#### i18n 架构方案
+
+```mermaid
+flowchart TD
+    Start["请求到达"] --> Loc{"Settings.LOCALE?"}
+
+    Loc -->|"zh"| ZH["加载 i18n/zh_CN/"]
+    Loc -->|"en"| EN["加载 i18n/en_US/"]
+
+    ZH --> AnalyzerPrompts["analyzer_prompts.yaml"]
+    ZH --> EvaluatorPrompts["evaluator_prompts.yaml"]
+    ZH --> GuidanceTemplates["guidance_templates.yaml"]
+    ZH --> SimulatorPrompts["simulator_prompts.yaml"]
+
+    EN --> AnalyzerPrompts
+    EN --> EvaluatorPrompts
+    EN --> GuidanceTemplates
+    EN --> SimulatorPrompts
+
+    AnalyzerPrompts --> Cache["PromptCache<br/>单例缓存"]
+    EvaluatorPrompts --> Cache
+    GuidanceTemplates --> Cache
+    SimulatorPrompts --> Cache
+
+    Cache --> Modules["各核心模块使用<br/>cached_prompts['analyzer']['role']"]
+```
+
+**目录结构设计**：
+
+```
+data/i18n/
+├── zh_CN/                      # 中文（简体）
+│   ├── analyzer_prompts.yaml   # 分析器 Prompt 模板
+│   ├── evaluator_prompts.yaml  # 评估器 Prompt 模板
+│   ├── guidance_templates.yaml # 引导话术模板
+│   └── simulator_prompts.yaml  # 客户模拟 Prompt 模板
+└── en_US/                      # 英文
+    ├── analyzer_prompts.yaml
+    ├── evaluator_prompts.yaml
+    ├── guidance_templates.yaml
+    └── simulator_prompts.yaml
+```
+
+**YAML 模板示例**（`i18n/en_US/analyzer_prompts.yaml`）：
+
+```yaml
+role_definition: >
+  You are a professional sales training analyst.
+  Please analyze the following sales pitch:
+
+output_format: >
+  Return analysis in JSON format with the following fields:
+  {
+      "key_information_points": ["key point 1", "key point 2", ...],
+      "expression_analysis": {
+          "clarity": score(1-10),
+          "professionalism": score(1-10),
+          "persuasiveness": score(1-10)
+      },
+      "coverage_status": {
+          "SP-001": "covered" or "not_covered",
+          ...
+      }
+  }
+
+return_instruction: Return only JSON, no other content.
+
+# 分析器上下文标签
+labels:
+  sales_pitch: "Sales Pitch:"
+  customer_info: "Customer Information:"
+  product_info: "Product Information:"
+  conversation_history: "Conversation History:"
+  target_semantic_points: "Target Semantic Points:"
+  industry_label: "- Industry:"
+  position_label: "- Position:"
+  concerns_label: "- Concerns:"
+  personality_label: "- Personality:"
+```
+
+**实现优先级建议**：
+
+| 优先级 | 内容 | 理由 |
+|--------|------|------|
+| **P0** | 抽取所有 Prompt 为 YAML 模板文件 | 最大工作量但基础步骤，不做这步无法推进 |
+| **P1** | 实现 PromptLoader 加载器 + Settings.LOCALE 配置 | 核心基础设施 |
+| **P2** | 完成英文版全部 YAML 模板 | 翻译工作 |
+| **P3** | 前端 i18n（index.html + app.js） | 独立于后端，可并行进行 |
+
+### 21.6 扩展难度与工作量评估矩阵
+
+| 扩展方向 | 改动文件数 | 新增代码量 | 复杂度 | 依赖外部资源 | 与现有测试兼容 | 面试讲解价值 |
+|----------|-----------|-----------|--------|-------------|--------------|-------------|
+| **多 LLM 接入** | 3-4 个 | ~100 行 | 低 | 新 API Key | 高（只需加集成测试） | 高（展示架构抽象能力） |
+| **个性化客户行为** | 3-5 个 | ~200-300 行 | 中 | 无（YAML 配置） | 高（单元测试充分） | 高（展示动态 Prompt 工程） |
+| **话术模式学习** | 新增 2-3 模块 + 改 2 个 | ~400-500 行 | 高 | 无 | 需新增测试 | 很高（展示 ML/NLP 思维） |
+| **多语言支持** | 8-10 个 + 新增 i18n/ 目录 | ~500+ 行（含翻译） | 中 | 翻译资源 | 需新增测试 | 中（展示工程化能力） |
+
+> **总结**: 当前架构在**抽象层次**上为 4 个方向的扩展都留了清晰的接口。其中「多 LLM 接入」改动最小、风险最低，可作为第一个扩展目标；「个性化客户行为」紧随其后，能显著提升用户体验；「话术模式学习」是最有技术深度的方向，适合作为面试中的亮点讨论；「多语言支持」是纯工程化工作，适合在产品化阶段实施。
