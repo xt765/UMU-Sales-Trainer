@@ -6,10 +6,12 @@
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from umu_sales_trainer.api.middleware import (
     LoggingMiddleware,
@@ -70,6 +72,10 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    static_dir = Path(__file__).parent.parent.parent / "static"
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=ALLOWED_ORIGINS,
@@ -87,6 +93,13 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+@app.get("/")
+async def root():
+    """根路由，重定向到前端页面。"""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/static/index.html")
 
 
 if __name__ == "__main__":

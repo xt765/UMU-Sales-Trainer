@@ -8,10 +8,9 @@ import sys
 
 import click
 
-from src.umu_sales_trainer.repositories.config_repo import ConfigRepository
-from src.umu_sales_trainer.services.chroma import ChromaService
-from src.umu_sales_trainer.services.embedding import EmbeddingService
-
+from umu_sales_trainer.repositories.config_repo import ConfigRepository
+from umu_sales_trainer.services.chroma import ChromaService
+from umu_sales_trainer.services.embedding import EmbeddingService
 
 COLLECTIONS: dict[str, str] = {
     "objection_handling": "异议处理知识库",
@@ -82,7 +81,7 @@ def _load_collection_data(
         (文档文本, 元数据) 元组列表
     """
     yaml_key = collection_name
-    raw_items = config_repo.loadKnowledgeBase(yaml_key)
+    raw_items = config_repo.load_knowledge_base(yaml_key)
     if not raw_items:
         return []
 

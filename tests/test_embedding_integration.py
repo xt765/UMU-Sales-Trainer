@@ -4,28 +4,29 @@
 """
 
 import os
+from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def setup_env():
+    """设置环境变量，从 .env 文件加载。"""
+    from dotenv import load_dotenv
+    env_path = Path(__file__).parent.parent / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
 
 
 class TestEmbeddingIntegration:
     """Embedding 服务集成测试类。"""
 
-    @pytest.fixture(autouse=True)
-    def setup_api_key(self) -> None:
-        """设置 API 密钥。
-
-        从环境变量获取 DashScope API 密钥。
-        """
+    def test_encode_single_text_real(self) -> None:
+        """测试单个文本编码。"""
         api_key = os.environ.get("DASHSCOPE_API_KEY", "")
         if not api_key:
             pytest.skip("DASHSCOPE_API_KEY not set")
 
-    def test_encode_single_text_real(self) -> None:
-        """测试单个文本编码。
-
-        使用真实 DashScope API 调用。
-        """
         from umu_sales_trainer.services.embedding import EmbeddingService
 
         service = EmbeddingService()
@@ -38,10 +39,11 @@ class TestEmbeddingIntegration:
         assert all(isinstance(x, float) for x in result[0])
 
     def test_encode_multiple_texts_real(self) -> None:
-        """测试多个文本编码。
+        """测试多个文本编码。"""
+        api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+        if not api_key:
+            pytest.skip("DASHSCOPE_API_KEY not set")
 
-        使用真实 DashScope API 调用。
-        """
         from umu_sales_trainer.services.embedding import EmbeddingService
 
         service = EmbeddingService()
@@ -54,10 +56,11 @@ class TestEmbeddingIntegration:
             assert len(embedding) > 0
 
     def test_encode_query_real(self) -> None:
-        """测试查询文本编码。
+        """测试查询文本编码。"""
+        api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+        if not api_key:
+            pytest.skip("DASHSCOPE_API_KEY not set")
 
-        使用真实 DashScope API 调用。
-        """
         from umu_sales_trainer.services.embedding import EmbeddingService
 
         service = EmbeddingService()
@@ -68,10 +71,11 @@ class TestEmbeddingIntegration:
         assert all(isinstance(x, float) for x in result)
 
     def test_encode_caching_real(self) -> None:
-        """测试缓存机制。
+        """测试缓存机制。"""
+        api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+        if not api_key:
+            pytest.skip("DASHSCOPE_API_KEY not set")
 
-        验证相同文本使用缓存，不重复调用 API。
-        """
         from umu_sales_trainer.services.embedding import EmbeddingService
 
         service = EmbeddingService()
@@ -84,10 +88,7 @@ class TestEmbeddingIntegration:
         assert len(service._cache) == 1
 
     def test_encode_empty_raises_error(self) -> None:
-        """测试空输入错误处理。
-
-        验证空列表抛出 ValueError。
-        """
+        """测试空输入错误处理。"""
         from umu_sales_trainer.services.embedding import EmbeddingService
 
         service = EmbeddingService()
@@ -96,10 +97,7 @@ class TestEmbeddingIntegration:
             service.encode([])
 
     def test_encode_query_empty_raises_error(self) -> None:
-        """测试空查询错误处理。
-
-        验证空字符串抛出 ValueError。
-        """
+        """测试空查询错误处理。"""
         from umu_sales_trainer.services.embedding import EmbeddingService
 
         service = EmbeddingService()
@@ -108,10 +106,11 @@ class TestEmbeddingIntegration:
             service.encode_query("")
 
     def test_clear_cache_real(self) -> None:
-        """测试缓存清除。
+        """测试缓存清除。"""
+        api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+        if not api_key:
+            pytest.skip("DASHSCOPE_API_KEY not set")
 
-        验证 clear_cache 方法正确清除缓存。
-        """
         from umu_sales_trainer.services.embedding import EmbeddingService
 
         service = EmbeddingService()
@@ -122,10 +121,11 @@ class TestEmbeddingIntegration:
         assert len(service._cache) == 0
 
     def test_embedding_consistency_real(self) -> None:
-        """测试嵌入一致性。
+        """测试嵌入一致性。"""
+        api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+        if not api_key:
+            pytest.skip("DASHSCOPE_API_KEY not set")
 
-        验证相同文本产生相同的嵌入向量。
-        """
         from umu_sales_trainer.services.embedding import EmbeddingService
 
         service = EmbeddingService()
@@ -137,10 +137,11 @@ class TestEmbeddingIntegration:
         assert result1 == result2
 
     def test_different_texts_produce_different_embeddings_real(self) -> None:
-        """测试不同文本产生不同嵌入。
+        """测试不同文本产生不同嵌入。"""
+        api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+        if not api_key:
+            pytest.skip("DASHSCOPE_API_KEY not set")
 
-        验证语义不同的文本产生明显不同的嵌入向量。
-        """
         from umu_sales_trainer.services.embedding import EmbeddingService
 
         service = EmbeddingService()
@@ -153,10 +154,11 @@ class TestEmbeddingIntegration:
         assert result1 != result2
 
     def test_close_client(self) -> None:
-        """测试关闭客户端。
+        """测试关闭客户端。"""
+        api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+        if not api_key:
+            pytest.skip("DASHSCOPE_API_KEY not set")
 
-        验证 close 方法正确关闭 HTTP 客户端。
-        """
         from umu_sales_trainer.services.embedding import EmbeddingService
 
         service = EmbeddingService()

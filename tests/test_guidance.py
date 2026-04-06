@@ -89,9 +89,7 @@ class TestGuidanceGenerator:
         Args:
             guidance_generator: 引导生成器实例
         """
-        uncovered_points = [
-            {"point_id": "SP-001", "description": "药品副作用", "importance": 0.85}
-        ]
+        uncovered_points = [{"point_id": "SP-001", "description": "药品副作用", "importance": 0.85}]
         context = {"product_name": "某降糖药物", "customer_need": "降血糖"}
 
         guidance = guidance_generator.generate(uncovered_points, context)
@@ -111,9 +109,7 @@ class TestGuidanceGenerator:
         Args:
             guidance_generator: 引导生成器实例
         """
-        uncovered_points = [
-            {"point_id": "SP-001", "description": "使用方法", "importance": 0.45}
-        ]
+        uncovered_points = [{"point_id": "SP-001", "description": "使用方法", "importance": 0.45}]
         context = {"product_name": "某降糖药物", "customer_need": "降血糖"}
 
         guidance = guidance_generator.generate(uncovered_points, context)
@@ -133,15 +129,13 @@ class TestGuidanceGenerator:
         Args:
             guidance_generator: 引导生成器实例
         """
-        uncovered_points = [
-            {"point_id": "SP-001", "description": "药品外观", "importance": 0.3}
-        ]
+        uncovered_points = [{"point_id": "SP-001", "description": "药品外观", "importance": 0.3}]
         context = {"product_name": "某降糖药物", "customer_need": "降血糖"}
 
         guidance = guidance_generator.generate(uncovered_points, context)
 
         assert "药品外观" in guidance
-        assert "补充" in guidance or "还有什么" in guidance
+        assert "除了" in guidance or "关于" in guidance
 
     @pytest.mark.asyncio
     async def test_generate_with_rag(
@@ -163,9 +157,7 @@ class TestGuidanceGenerator:
         mock_response.content = "结合知识的引导话术。"
         mock_llm_service.invoke = MagicMock(return_value=mock_response)
 
-        uncovered_points = [
-            {"point_id": "SP-001", "description": "降糖效果", "importance": 0.7}
-        ]
+        uncovered_points = [{"point_id": "SP-001", "description": "降糖效果", "importance": 0.7}]
         context = {"product_name": "某降糖药物", "customer_need": "降血糖"}
 
         guidance = generator.generate(uncovered_points, context)
@@ -234,7 +226,11 @@ class TestGuidanceGenerator:
 
         for test_case in test_cases:
             uncovered_points = [
-                {"point_id": "SP-001", "description": "测试点", "importance": test_case["importance"]}
+                {
+                    "point_id": "SP-001",
+                    "description": "测试点",
+                    "importance": test_case["importance"],
+                }
             ]
             context = {"product_name": "某产品", "customer_need": "需求"}
 

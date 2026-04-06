@@ -157,3 +157,12 @@ class ChromaService:
             name: Collection 名称
         """
         self.client.delete_collection(name=name)
+
+    def close(self) -> None:
+        """关闭 Chroma 客户端。
+
+        释放资源并关闭持久化连接。
+        """
+        if hasattr(self.client, "close"):
+            self.client.close()
+        self.client = None

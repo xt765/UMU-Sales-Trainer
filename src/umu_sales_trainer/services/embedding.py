@@ -28,7 +28,9 @@ class EmbeddingService:
         >>> query_embedding = service.encode_query("search query")
     """
 
-    DASHSCOPE_EMBEDDING_URL = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding"
+    DASHSCOPE_EMBEDDING_URL = (
+        "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding"
+    )
 
     def __init__(
         self,
@@ -41,9 +43,17 @@ class EmbeddingService:
                 Defaults to "text-embedding-v1".
         """
         self._model_name = model_name
-        self._api_key = os.environ.get("DASHSCOPE_API_KEY", "")
         self._cache: dict[str, List[float]] = {}
         self._client: httpx.Client | None = None
+
+    @property
+    def _api_key(self) -> str:
+        """Get API key from environment dynamically.
+
+        Returns:
+            API key string.
+        """
+        return os.environ.get("DASHSCOPE_API_KEY", "")
 
     def _get_client(self) -> httpx.Client:
         """Get or create HTTP client.

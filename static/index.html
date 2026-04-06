@@ -3,64 +3,150 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI销售训练Chatbot系统</title>
-    <link rel="stylesheet" href="styles.css">
+    <title>AI 销售训练 Chatbot</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
 </head>
 <body>
     <div class="app-container">
-        <header class="header">
-            <h1 class="header-title">AI销售训练Chatbot系统</h1>
-        </header>
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">🎯</div>
+                <div class="sidebar-title">
+                    <h1>AI 销售训练</h1>
+                    <p>智能对话模拟系统</p>
+                </div>
+            </div>
 
-        <main class="main-content">
-            <aside class="sidebar">
-                <div class="customer-card" id="customerCard">
-                    <h2 class="customer-card-title">客户画像</h2>
-                    <div class="customer-info">
-                        <p class="customer-name">张主任</p>
-                        <p class="customer-role">某三甲医院采购负责人</p>
-                        <p class="customer-detail">预算充足，对高端医疗设备有采购需求</p>
+            <div class="session-info">
+                <div class="session-label">当前会话</div>
+                <div class="session-id" id="sessionIdDisplay">
+                    <span class="session-empty">暂无活动会话</span>
+                </div>
+            </div>
+
+            <div class="customer-profile">
+                <div class="profile-header">
+                    <div class="profile-avatar">张</div>
+                    <div class="profile-info">
+                        <h3>张主任</h3>
+                        <p>内分泌科主任</p>
                     </div>
                 </div>
-
-                <div class="progress-section">
-                    <h3 class="progress-title">语义点覆盖</h3>
-                    <div class="progress-bar">
-                        <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                <div class="profile-details">
+                    <div class="detail-item">
+                        <i data-lucide="target"></i>
+                        <span>糖尿病控制率</span>
                     </div>
-                    <p class="progress-text"><span id="progressPercent">0</span>%</p>
+                    <div class="detail-item">
+                        <i data-lucide="shield"></i>
+                        <span>药物安全性</span>
+                    </div>
+                    <div class="detail-item">
+                        <i data-lucide="clipboard-list"></i>
+                        <span>注重循证医学证据</span>
+                    </div>
                 </div>
-            </aside>
+            </div>
 
-            <section class="chat-section">
-                <div class="chat-header">
-                    <h2 class="chat-title">会话区域</h2>
-                    <button class="btn-new-chat" id="btnNewChat">新建会话</button>
+            <div class="coverage-section">
+                <div class="section-title">
+                    <i data-lucide="check-square"></i>
+                    <span>语义点覆盖</span>
                 </div>
-
-                <div class="chat-messages" id="chatMessages">
-                    <div class="message message-ai">
-                        <div class="message-avatar">AI</div>
-                        <div class="message-content">
-                            <p>您好！我是您的AI销售训练助手。今天我们将模拟一场与张主任的销售对话，请问您准备如何开场？</p>
+                <div class="coverage-items" id="coverageItems">
+                    <div class="coverage-item not-covered">
+                        <div class="item-info">
+                            <h4>HbA1c 改善</h4>
+                            <p>提及降低糖化血红蛋白效果</p>
                         </div>
+                        <div class="item-status not-covered"></div>
+                    </div>
+                    <div class="coverage-item not-covered">
+                        <div class="item-info">
+                            <h4>低血糖风险</h4>
+                            <p>提及低血糖风险低</p>
+                        </div>
+                        <div class="item-status not-covered"></div>
+                    </div>
+                    <div class="coverage-item not-covered">
+                        <div class="item-info">
+                            <h4>用药便利性</h4>
+                            <p>提及一周一次给药</p>
+                        </div>
+                        <div class="item-status not-covered"></div>
                     </div>
                 </div>
-
-                <div class="chat-input-area">
-                    <input
-                        type="text"
-                        class="chat-input"
-                        id="chatInput"
-                        placeholder="请输入您的回复..."
-                        autocomplete="off"
-                    >
-                    <button class="btn-send" id="btnSend">发送</button>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill" style="width: 0%"></div>
                 </div>
-            </section>
+                <div class="progress-text" id="progressText">0% 覆盖</div>
+            </div>
+        </aside>
+
+        <!-- Main content -->
+        <main class="main-content">
+            <header class="chat-header">
+                <div class="chat-title">
+                    <div class="status-indicator"></div>
+                    <h2>销售拜访训练</h2>
+                </div>
+                <div class="chat-actions">
+                    <button class="btn btn-primary" id="btnNewChat">
+                        <i data-lucide="plus"></i>
+                        新建会话
+                    </button>
+                    <button class="btn btn-secondary" id="btnDeleteSession" disabled>
+                        <i data-lucide="trash-2"></i>
+                        结束会话
+                    </button>
+                </div>
+            </header>
+
+            <div class="chat-messages" id="chatMessages">
+                <div class="message ai">
+                    <div class="message-avatar">AI</div>
+                    <div class="message-content">
+                        您好！我是您的AI销售训练助手。今天我们将模拟一场与张主任的销售对话。
+                        <br><br>
+                        张主任是内分泌科主任，关注糖尿病控制率和药物安全性，注重循证医学证据。
+                        <br><br>
+                        请开始您的销售开场...
+                    </div>
+                </div>
+            </div>
+
+            <div class="chat-input-area">
+                <form class="input-form" id="inputForm">
+                    <div class="input-wrapper">
+                        <textarea
+                            class="chat-input"
+                            id="chatInput"
+                            placeholder="输入您的销售话术..."
+                            rows="1"
+                        ></textarea>
+                    </div>
+                    <button type="submit" class="send-button" id="btnSend" disabled>
+                        <i data-lucide="send"></i>
+                    </button>
+                </form>
+            </div>
         </main>
     </div>
 
-    <script src="app.js"></script>
+    <!-- Toast notifications -->
+    <div class="toast" id="toast"></div>
+
+    <!-- Loading overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+    </div>
+
+    <script>
+        // Initialize Lucide icons
+        lucide.createIcons();
+    </script>
+    <script src="/static/app.js"></script>
 </body>
 </html>

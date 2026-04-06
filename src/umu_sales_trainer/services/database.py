@@ -6,7 +6,7 @@
 
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Generator, Optional
 
 from sqlalchemy import (
     JSON,
@@ -201,8 +201,16 @@ class DatabaseService:
         """
         Base.metadata.create_all(self.engine)
 
+    def close(self) -> None:
+        """关闭数据库连接。
+
+        释放所有数据库连接池资源。
+        """
+        if self.engine:
+            self.engine.dispose()
+
     @contextmanager
-    def create_session(self) -> Session:
+    def create_session(self) -> Generator[Session, None, None]:
         """创建数据库会话的上下文管理器。
 
         Yields:

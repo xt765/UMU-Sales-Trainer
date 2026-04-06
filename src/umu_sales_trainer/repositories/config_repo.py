@@ -117,7 +117,16 @@ class ConfigRepository:
 
         file_path = self._data_dir / "knowledge" / f"{category}.yaml"
         data = self._load_yaml(file_path)
-        items = data.get("items", [])
+        yaml_key = category if category in data else None
+        if yaml_key is None:
+            for key in ["objection_strategies", "product_knowledge", "excellent_samples"]:
+                if key in data:
+                    yaml_key = key
+                    break
+        if yaml_key is None:
+            items = []
+        else:
+            items = data.get(yaml_key, [])
         self._kb_cache[category] = items
         return items
 

@@ -89,12 +89,20 @@ class TestEmbeddingService:
 
         验证 encode 方法在 DASHSCOPE_API_KEY 未设置时抛出 RuntimeError。
         """
-        from umu_sales_trainer.services.embedding import EmbeddingService
+        import os as os_module
 
-        service = EmbeddingService()
-        with patch.dict("os.environ", {}, clear=True):
+        original_key = os_module.environ.get("DASHSCOPE_API_KEY", "")
+        os_module.environ.pop("DASHSCOPE_API_KEY", None)
+
+        try:
+            from umu_sales_trainer.services.embedding import EmbeddingService
+
+            service = EmbeddingService()
             with pytest.raises(RuntimeError, match="DASHSCOPE_API_KEY"):
                 service.encode(["测试文本"])
+        finally:
+            if original_key:
+                os_module.environ["DASHSCOPE_API_KEY"] = original_key
 
     def test_clear_cache(self) -> None:
         """测试缓存清除。
@@ -181,8 +189,8 @@ class TestDatabaseService:
 
         验证 DatabaseService 能正确初始化（使用文件路径避免 SQLite 内存模式限制）。
         """
-        import tempfile
         import os
+        import tempfile
 
         from umu_sales_trainer.services.database import DatabaseService
 

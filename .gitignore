@@ -50,4 +50,6 @@ Thumbs.db
 *.swo
 *~
 
-chromadb/
+chroma_data/
+chroma_db/
+test_chroma_soft/
