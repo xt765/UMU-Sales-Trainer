@@ -382,38 +382,38 @@ def create_workflow(embedding_service, llm_service):
 
 ```mermaid
 graph TD
-    subgraph 外部输入[外部写入]
-        EXT1[session_id]
-        EXT2[sales_message]
-        EXT3[current_message]
-        EXT4[customer_profile]
-        EXT5[product_info]
-        EXT6[semantic_points]
-        EXT7[messages]
+    subgraph EXT["外部输入"]
+        EXT1["session_id"]
+        EXT2["sales_message"]
+        EXT3["current_message"]
+        EXT4["customer_profile"]
+        EXT5["product_info"]
+        EXT6["semantic-points"]
+        EXT7["messages"]
     end
 
-    subgraph CA节点产生[conversation_analyze 写入]
-        CA_OUT[conversation_analysis]
+    subgraph CA["conversation-analyze 写入"]
+        CA_OUT["conversation-analysis"]
     end
 
-    subgraph SE节点产生[semantic_eval 写入]
-        SE_OUT[coverage_result]
+    subgraph SE["semantic-eval 写入"]
+        SE_OUT["coverage-result"]
     end
 
-    subgraph EE节点产生[expression_eval 写入]
-        EE_OUT[expression_result]
+    subgraph EE["expression-eval 写入"]
+        EE_OUT["expression-result"]
     end
 
-    subgraph SYN节点产生[synthesize 写入]
-        SYN_OUT[evaluation_result]
+    subgraph SYN["synthesize 写入"]
+        SYN_OUT["evaluation-result"]
     end
 
-    subgraph GM节点产生[guidance 写入]
-        GM_OUT[guidance_result]
+    subgraph GM["guidance 写入"]
+        GM_OUT["guidance-result"]
     end
 
-    subgraph SIM节点产生[simulate 写入]
-        SIM_OUT[ai_response]
+    subgraph SIM["simulate 写入"]
+        SIM_OUT["ai-response"]
     end
 
     EXT1 & EXT2 & EXT3 & EXT4 & EXT7 --> CA_OUT
@@ -581,17 +581,17 @@ sqrt 函数导致**边际收益递减**：从 0% 提升到 33% 获得 23 分，�
 
 ```mermaid
 graph LR
-    RESP[SendMessageResponse] --> AI[updateAIPanel<br/>ai_response]
-    RESP --> COV[updateCoveragePanel<br/>evaluation.coverage_status<br/>evaluation.coverage_rate<br/>evaluation.coverage_labels]
-    RESP --> EXP[updateExpressionPanel<br/>evaluation.expression_analysis<br/>evaluation.suggestions]
-    RESP --> CONV[updateInsightPanel<br/>evaluation.conversation_analysis]
-    RESP --> GUID[updateGuidancePanel<br/>guidance]
+    RESP["SendMessageResponse"] --> AI["updateAIPanel / ai-response"]
+    RESP --> COV["updateCoveragePanel / eval.coverage-status"]
+    RESP --> EXP["updateExpressionPanel / eval.expression-analysis"]
+    RESP --> CONV["updateInsightPanel / eval.conversation-analysis"]
+    RESP --> GUID["updateGuidancePanel / guidance"]
 
-    AI --> P1[AI 客户回复面板]
-    COV --> P2[语义覆盖面板]
-    EXP --> P3[表达评分面板]
-    CONV --> P4[会话洞察面板]
-    GUID --> P5[智能引导面板]
+    AI --> P1["AI 客户回复面板"]
+    COV --> P2["语义覆盖面板"]
+    EXP --> P3["表达评分面板"]
+    CONV --> P4["会话洞察面板"]
+    GUID --> P5["智能引导面板"]
 ```
 
 ### 6.2 双态引导面板的状态机

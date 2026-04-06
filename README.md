@@ -168,10 +168,10 @@ graph TD
 
 ```mermaid
 graph TD
-    subgraph Frontend[前端层]
-        UI[HTML/CSS/JavaScript 单页应用]
-        "UI Panels[左侧 5 面板布局]"
-        "UI Chat[右侧对话区域]"
+    subgraph Frontend["前端层"]
+        UI["HTML/CSS/JavaScript 单页应用"]
+        Panels["左侧 5 面板布局"]
+        Chat["右侧对话区域"]
     end
 
     subgraph API[API 层 - FastAPI]
@@ -540,15 +540,19 @@ graph LR
 
 ```mermaid
 graph TD
-    MSG[销售消息] + POINT[语义点] --> L1[第1层: 关键词检测<br/>权重 0.2<br/>BM25 式精确匹配]
-    MSG + POINT --> L2[第2层: Embedding 相似度<br/>权重 0.3<br/>余弦相似度阈值过滤]
-    MSG + POINT --> L3[第3层: LLM 深度判断<br/>权重 0.5<br/>大语言模型语义理解]
+    MSG["销售消息"] --> L1["第1层: 关键词检测 / 权重0.2"]
+    MSG --> L2["第2层: Embedding相似度 / 权重0.3"]
+    MSG --> L3["第3层: LLM深度判断 / 权重0.5"]
 
-    L1 --> S1[得分: 0~1]
-    L2 --> S2[得分: 0~1]
-    L3 --> S3[得分: 0 或 1]
+    POINT["语义点"] --> L1
+    POINT --> L2
+    POINT --> L3
 
-    S1 --> FINAL[加权综合: >=0.5 → covered<br/><0.5 → not_covered]
+    L1 --> S1["得分: 0~1"]
+    L2 --> S2["得分: 0~1"]
+    L3 --> S3["得分: 0 或 1"]
+
+    S1 --> FINAL["加权综合: >=0.5 covered / <0.5 not-covered"]
     S2 --> FINAL
     S3 --> FINAL
 ```
@@ -697,19 +701,19 @@ stateDiagram-v2
 
 ```mermaid
 flowchart TD
-    INPUT[输入: coverage_result + expression_result + turn] --> F1[因子1: 覆盖率得分<br/>sqrt(coverage_rate) * 40]
-    INPUT --> F2[因子2: 表达力得分<br/>weighted(clarity, pro, persuasion) * 35]
-    INPUT --> F3[因子3: 回合惩罚因子<br/>T1=0.70 / T2=0.78 / T3=0.86 / T4=0.93 / T5+=1.0]
-    INPUT --> F4[因子4: 质量调整分<br/>-5 ~ +4 based on message length]
+    INPUT["输入: coverage-result + expression-result + turn"] --> F1["因子1: 覆盖率得分 sqrt(coverage-rate) x 40"]
+    INPUT --> F2["因子2: 表达力得分 weighted(clarity, pro, persuasion) x 35"]
+    INPUT --> F3["因子3: 回合惩罚因子 T1=0.70 / T2=0.78 / T3=0.86 / T4=0.93 / T5+=1.0"]
+    INPUT --> F4["因子4: 质量调整分 -5 ~ +4 based on message length"]
 
-    F1 --> RAW[原始总分 = F1 + F2]
+    F1 --> RAW["原始总分 = F1 + F2"]
     F2 --> RAW
 
-    RAW --> PENALIZED[惩罚后得分 = RAW * F3]
-    PENALIZED --> FINAL[最终得分 = PENALIZED + F4]
+    RAW --> PENALIZED["惩罚后得分 = RAW x F3"]
+    PENALIZED --> FINAL["最终得分 = PENALIZED + F4"]
     F4 --> FINAL
 
-    FINAL --> CLAMP[clamp(0, 100) + round]
+    FINAL --> CLAMP["clamp(0, 100) + round"]
 ```
 
 #### 因子 1：覆盖率得分（满分 40 分）
