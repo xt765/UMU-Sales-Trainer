@@ -9,6 +9,35 @@
 </head>
 <body>
     <div class="app-container">
+        <!-- Top Status Bar -->
+        <header class="top-status-bar">
+            <div class="topbar-brand">
+                <div class="logo">AI</div>
+                <span class="brand-text">AI 销售训练</span>
+            </div>
+
+            <div class="topbar-session-info" id="topbarSessionInfo">
+                <span class="no-session">暂无活动会话</span>
+            </div>
+
+            <div class="topbar-actions">
+                <button class="btn btn-sm btn-primary" id="btnNewChat">
+                    <i data-lucide="plus"></i>
+                    <span>新建</span>
+                </button>
+                <button class="btn btn-sm btn-secondary" id="btnDeleteSession" disabled>
+                    <i data-lucide="x"></i>
+                    <span>结束</span>
+                </button>
+
+                <div class="drawer-trigger" id="drawerTrigger">
+                    <i data-lucide="messages-square"></i>
+                    <span class="drawer-badge" id="drawerBadge">0</span>
+                    <span class="drawer-hint">会话历史</span>
+                </div>
+            </div>
+        </header>
+
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
@@ -16,13 +45,6 @@
                 <div class="sidebar-title">
                     <h1>AI 销售训练</h1>
                     <p>智能对话模拟系统</p>
-                </div>
-            </div>
-
-            <div class="session-info">
-                <div class="session-label">当前会话</div>
-                <div class="session-id" id="sessionIdDisplay">
-                    <span class="session-empty">暂无活动会话</span>
                 </div>
             </div>
 
@@ -98,16 +120,6 @@
                     <div class="status-indicator"></div>
                     <h2>销售拜访训练</h2>
                 </div>
-                <div class="chat-actions">
-                    <button class="btn btn-primary" id="btnNewChat">
-                        <i data-lucide="plus"></i>
-                        <span>新建会话</span>
-                    </button>
-                    <button class="btn btn-secondary" id="btnDeleteSession" disabled>
-                        <i data-lucide="log-out"></i>
-                        <span>结束会话</span>
-                    </button>
-                </div>
             </header>
 
             <div class="chat-messages" id="chatMessages">
@@ -137,6 +149,27 @@
                 </form>
             </div>
         </main>
+
+        <!-- Session Drawer (Right Side) -->
+        <aside class="session-drawer" id="sessionDrawer">
+            <div class="drawer-header">
+                <h3>历史会话</h3>
+                <button class="drawer-close" onclick="closeDrawer()">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+
+            <div class="drawer-content" id="sessionListContainer">
+                <p class="empty-list">暂无历史会话</p>
+            </div>
+
+            <div class="drawer-footer">
+                <button class="btn btn-block btn-secondary" onclick="clearHistory()">
+                    <i data-lucide="trash-2"></i>
+                    <span>清空历史</span>
+                </button>
+            </div>
+        </aside>
     </div>
 
     <!-- Toast notifications -->

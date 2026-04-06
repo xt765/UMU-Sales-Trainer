@@ -9,12 +9,19 @@ const API_BASE = '/api/v1';
 
 const appState = {
   currentSessionId: null,
+  sessions: [],
+  currentSessionNumber: 0,
+  messageCount: 0,
   isLoading: false,
   coverageData: []
 };
 
 const elements = {
-  sessionIdDisplay: document.getElementById('sessionIdDisplay'),
+  topbarSessionInfo: document.getElementById('topbarSessionInfo'),
+  sessionDrawer: document.getElementById('sessionDrawer'),
+  drawerTrigger: document.getElementById('drawerTrigger'),
+  drawerBadge: document.getElementById('drawerBadge'),
+  sessionListContainer: document.getElementById('sessionListContainer'),
   btnNewChat: document.getElementById('btnNewChat'),
   btnDeleteSession: document.getElementById('btnDeleteSession'),
   btnSend: document.getElementById('btnSend'),
@@ -172,7 +179,22 @@ async function createSession() {
     
     const response = await fetch(`${API_BASE}/sessions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customer_profile: {
+          industry: "医疗",
+          position: "内分泌科主任",
+          concerns: ["安全性", "疗效", "患者依从性"],
+          personality: "专业严谨",
+          objection_tendencies: ["价格高", "证据不足"]
+        },
+        product_info: {
+          name: "新型降糖药",
+          description: "GLP-1受体激动剂",
+          core_benefits: ["降糖效果好", "低血糖风险低", "一周一次给药"],
+          key_selling_points: {}
+        }
+      })
     });
     
     if (!response.ok) {
@@ -180,11 +202,23 @@ async function createSession() {
     }
     
     const data = await response.json();
+    
     appState.currentSessionId = data.session_id;
+    appState.currentSessionNumber += 1;
+    appState.messageCount = 0;
     
-    elements.sessionIdDisplay.innerHTML = `<span class="session-id">${data.session_id}</span>`;
+    appState.sessions.unshift({
+      id: data.session_id,
+      number: appState.currentSessionNumber,
+      startTime: new Date(),
+      turns: 0,
+      status: 'active',
+      coverage: 0
+    });
     
-    elements.chatMessages.innerHTML = '';
+    updateTopBarSession();
+    updateDrawerBadge();
+    clearChatMessages();
     
     showToast('会话创建成功！', 'success');
     
@@ -214,24 +248,18 @@ async function deleteSession() {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
     
-    appState.currentSessionId = null;
-    elements.sessionIdDisplay.innerHTML = '<span class="session-empty">暂无活动会话</span>';
-    elements.chatMessages.innerHTML = `
-      <div class="message ai">
-        <div class="message-avatar">AI</div>
-        <div class="message-content">
-          您好！我是您的AI销售训练助手。今天我们将模拟一场与张主任的销售对话。<br><br>
-          张主任是内分泌科主任，关注糖尿病控制率和药物安全性，注重循证医学证据。<br><br>
-          请开始您的销售开场...
-        </div>
-      </div>
-    `;
+    const session = appState.sessions.find(s => s.id === appState.currentSessionId);
+    if (session) {
+      session.status = 'completed';
+      session.endTime = new Date();
+    }
     
-    updateCoverageDisplay([
-      { name: 'HbA1c 改善', description: '提及降低糖化血红蛋白效果', status: 'not-covered' },
-      { name: '低血糖风险', description: '提及低血糖风险低', status: 'not-covered' },
-      { name: '用药便利性', description: '提及一周一次给药', status: 'not-covered' }
-    ]);
+    appState.currentSessionId = null;
+    appState.messageCount = 0;
+    
+    updateTopBarSession();
+    resetChatToInitialState();
+    resetCoverageDisplay();
     
     showToast('会话已结束', 'success');
     
@@ -251,7 +279,7 @@ async function sendMessageToAI(message, isInitial = false) {
   try {
     addTypingIndicator();
     
-    const payload = isInitial ? {} : { message };
+    const payload = isInitial ? { content: "请开始对话" } : { content: message };
     
     const response = await fetch(`${API_BASE}/sessions/${appState.currentSessionId}/messages`, {
       method: 'POST',
@@ -267,12 +295,22 @@ async function sendMessageToAI(message, isInitial = false) {
     
     const data = await response.json();
     
-    if (data.response) {
-      addMessage(data.response, false);
+    if (data.ai_response && !isInitial) {
+      addMessage(data.ai_response, false);
+    } else if (data.ai_response && isInitial) {
+      addMessage(data.ai_response, false);
     }
     
-    if (data.semantic_coverage) {
-      updateCoverageDisplay(data.semantic_coverage);
+    if (data.evaluation && data.evaluation.coverage_status) {
+      const coverageData = Object.entries(data.evaluation.coverage_status).map(([name, status]) => ({
+        name,
+        description: name,
+        status: status
+      }));
+      
+      if (coverageData.length > 0) {
+        updateCoverageDisplay(coverageData);
+      }
     }
     
     if (data.is_complete) {
@@ -297,6 +335,8 @@ async function handleSendMessage(e) {
   elements.chatInput.style.height = 'auto';
   
   updateButtonStates();
+  
+  updateMessageCount();
   
   await sendMessageToAI(message);
 }
@@ -327,4 +367,173 @@ elements.chatInput.addEventListener('keydown', (e) => {
 
 document.addEventListener('DOMContentLoaded', () => {
   updateButtonStates();
+  initDrawerHover();
 });
+
+function updateTopBarSession() {
+  if (!elements.topbarSessionInfo) return;
+  
+  if (!appState.currentSessionId) {
+    elements.topbarSessionInfo.innerHTML = `
+      <span class="no-session">暂无活动会话</span>
+    `;
+    return;
+  }
+
+  const session = appState.sessions.find(s => s.id === appState.currentSessionId);
+  
+  elements.topbarSessionInfo.innerHTML = `
+    <div class="session-status-card">
+      <span class="status-dot active"></span>
+      <strong>训练 #${appState.currentSessionNumber}</strong>
+      <span class="meta-separator">·</span>
+      <span class="status-label">进行中</span>
+      <span class="meta-separator">·</span>
+      <span class="turn-count">第 ${appState.messageCount} 轮</span>
+    </div>
+  `;
+}
+
+function clearChatMessages() {
+  if (elements.chatMessages) {
+    elements.chatMessages.innerHTML = '';
+  }
+}
+
+function resetChatToInitialState() {
+  if (elements.chatMessages) {
+    elements.chatMessages.innerHTML = `
+      <div class="message ai">
+        <div class="message-avatar">AI</div>
+        <div class="message-content">
+          您好！我是您的AI销售训练助手。今天我们将模拟一场与张主任的销售对话。<br><br>
+          张主任是内分泌科主任，关注糖尿病控制率和药物安全性，注重循证医学证据。<br><br>
+          请开始您的销售开场...
+        </div>
+      </div>
+    `;
+  }
+}
+
+function resetCoverageDisplay() {
+  updateCoverageDisplay([
+    { name: 'HbA1c 改善', description: '提及降低糖化血红蛋白效果', status: 'not-covered' },
+    { name: '低血糖风险', description: '提及低血糖风险低', status: 'not-covered' },
+    { name: '用药便利性', description: '提及一周一次给药', status: 'not-covered' }
+  ]);
+}
+
+function updateMessageCount() {
+  appState.messageCount += 1;
+  
+  const session = appState.sessions.find(s => s.id === appState.currentSessionId);
+  if (session) {
+    session.turns = appState.messageCount;
+  }
+  
+  updateTopBarSession();
+  loadSessionList();
+}
+
+function updateDrawerBadge() {
+  if (elements.drawerBadge) {
+    elements.drawerBadge.textContent = appState.sessions.length.toString();
+  }
+}
+
+function initDrawerHover() {
+  const drawer = elements.sessionDrawer;
+  const trigger = elements.drawerTrigger;
+  
+  if (!drawer || !trigger) return;
+  
+  let hideTimer = null;
+
+  trigger.addEventListener('mouseenter', () => {
+    clearTimeout(hideTimer);
+    drawer.classList.add('visible');
+    loadSessionList();
+  });
+
+  drawer.addEventListener('mouseleave', () => {
+    hideTimer = setTimeout(() => {
+      if (!drawer.matches(':hover')) {
+        drawer.classList.remove('visible');
+      }
+    }, 300);
+  });
+
+  drawer.addEventListener('mouseenter', () => {
+    clearTimeout(hideTimer);
+  });
+}
+
+function closeDrawer() {
+  if (elements.sessionDrawer) {
+    elements.sessionDrawer.classList.remove('visible');
+  }
+}
+
+function loadSessionList() {
+  if (!elements.sessionListContainer) return;
+  
+  if (appState.sessions.length === 0) {
+    elements.sessionListContainer.innerHTML = '<p class="empty-list">暂无历史会话</p>';
+    return;
+  }
+  
+  const html = appState.sessions.map(session => {
+    const timeStr = formatTime(new Date(session.startTime));
+    const isActive = session.id === appState.currentSessionId;
+    
+    return `
+      <div class="session-list-item ${isActive ? 'active' : ''}" 
+           data-session-id="${session.id}"
+           onclick="switchSession('${session.id}')">
+        <div class="item-main">
+          <span class="item-number">训练 #${session.number}</span>
+          <span class="item-time">${timeStr}</span>
+        </div>
+        <div class="item-meta">
+          <span class="item-turns">${session.turns}轮对话</span>
+          <span class="item-coverage">覆盖率 ${session.coverage}%</span>
+        </div>
+        <div class="item-status-badge ${session.status}">${session.status === 'active' ? '进行中' : '已完成'}</div>
+      </div>
+    `;
+  }).join('');
+  
+  elements.sessionListContainer.innerHTML = html;
+  
+  lucide.createIcons();
+}
+
+async function switchSession(sessionId) {
+  if (sessionId === appState.currentSessionId) {
+    closeDrawer();
+    return;
+  }
+  
+  console.log('Switch to session:', sessionId);
+  closeDrawer();
+  showToast('会话切换功能开发中...', 'warning');
+}
+
+function clearHistory() {
+  if (!confirm('确定要清空所有历史会话吗？')) return;
+  
+  appState.sessions = [];
+  appState.currentSessionId = null;
+  appState.currentSessionNumber = 0;
+  appState.messageCount = 0;
+  
+  updateTopBarSession();
+  updateDrawerBadge();
+  resetChatToInitialState();
+  resetCoverageDisplay();
+  updateButtonStates();
+  loadSessionList();
+  
+  showToast('历史已清空', 'success');
+  closeDrawer();
+}
